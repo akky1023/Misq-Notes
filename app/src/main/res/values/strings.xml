@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="storage_conflict">保存先にも変更があります。両方の内容を保持しています。別の空の保存先を選ぶと、端末内の内容を保存できます。</string>
+    <string name="storage_incoming">保存先の更新を取得しました。アプリを開き直すと反映されます。</string>
+    <string name="lasso_free">自由</string>
+    <string name="lasso_rectangle">矩形</string>
+    <string name="insert_space">余白を挿入</string>
+    <string name="insert_space_drag">中央の丸を上下に動かして余白を調整します。書き始めるか、丸以外を指で押すと確定します。2本指でキャンセルします。</string>
+    <string name="insert_space_empty">この位置より下にストロークがありません。</string>
+    <string name="pen_color" formatted="false">"ペンの色"</string>
+    <string name="opacity" formatted="false">"透明度"</string>
+    <string name="save_rgb" formatted="false">"このRGBを保存"</string>
+    <string name="remove_rgb" formatted="false">"このRGBを保存色から削除"</string>
+    <string name="retry_save" formatted="false">"保存を再試行"</string>
+    <string name="discard" formatted="false">"変更を破棄"</string>
+    <string name="apply" formatted="false">"適用"</string>
+    <string name="color_preview" formatted="false">"色のプレビュー"</string>
+    <string name="color_picker" formatted="false">"彩度と明るさのカラーピッカー"</string>
+    <string name="increase_saturation" formatted="false">"彩度を上げる"</string>
+    <string name="decrease_saturation" formatted="false">"彩度を下げる"</string>
+    <string name="increase_brightness" formatted="false">"明るくする"</string>
+    <string name="decrease_brightness" formatted="false">"暗くする"</string>
+    <string name="hue" formatted="false">"色相"</string>
+    <string name="open_palette" formatted="false">"カラーパレットを開く"</string>
+    <string name="popover_animation" formatted="false">"ポップオーバーの開閉"</string>
+    <string name="close" formatted="false">"閉じる"</string>
+    <string name="back_again" formatted="false">"もう一度戻るとノート一覧へ戻ります"</string>
+    <string name="back_to_notes" formatted="false">"ノート一覧に戻る"</string>
+    <string name="note_settings" formatted="false">"ノートの設定"</string>
+    <string name="zoom_level">"拡大率 %1$s%%"</string>
+    <string name="zoom_notice">"拡大率を一時表示 %1$s%%"</string>
+    <string name="saving" formatted="false">"保存中"</string>
+    <string name="note_background" formatted="false">"ノートの背景"</string>
+    <string name="storage_default" formatted="false">"デフォルト（アプリ内）"</string>
+    <string name="library_load_failed">"一覧の設定を読み込めません：%1$s"</string>
+    <string name="library_save_failed">"一覧設定の保存に失敗しました：%1$s"</string>
+    <string name="palette_load_failed">"保存色を読み込めません：%1$s"</string>
+    <string name="palette_save_failed">"色の保存に失敗しました：%1$s"</string>
+    <string name="widths_load_failed">"太さの設定を読み込めません：%1$s"</string>
+    <string name="settings_save_failed">"設定の保存に失敗しました：%1$s"</string>
+    <string name="save_failed">"保存に失敗しました：%1$s"</string>
+    <string name="wait_library" formatted="false">"一覧の保存を完了してから変更してください"</string>
+    <string name="wait_note" formatted="false">"ノートの保存を完了してから変更してください"</string>
+    <string name="wait_palette" formatted="false">"パレットの保存を完了してから変更してください"</string>
+    <string name="wait_pen" formatted="false">"ペン設定の保存を完了してから変更してください"</string>
+    <string name="retry_library" formatted="false">"一覧の保存を再試行してください"</string>
+    <string name="retry_note" formatted="false">"ノートの保存を再試行してください"</string>
+    <string name="retry_palette" formatted="false">"パレットの保存を再試行してください"</string>
+    <string name="retry_pen" formatted="false">"ペン設定の保存を再試行してください"</string>
+    <string name="untitled" formatted="false">"無題"</string>
+    <string name="folder_save_failed" formatted="false">"フォルダを保存できませんでした"</string>
+    <string name="wait_stroke_back" formatted="false">"筆跡を確定中です。もう一度一覧へ戻ってください。"</string>
+    <string name="operation_failed" formatted="false">"処理に失敗しました"</string>
+    <string name="new_folder" formatted="false">"新しいフォルダ"</string>
+    <string name="wait_stroke_action" formatted="false">"筆跡を確定してから操作してください"</string>
+    <string name="wait_stroke_export" formatted="false">"筆跡を確定してから出力してください"</string>
+    <string name="pdf_too_many_pages" formatted="false">"PDFのページ数が多すぎます"</string>
+    <string name="pagination_failed" formatted="false">"改ページ位置を計算できません"</string>
+    <string name="toolbar_animation" formatted="false">"ツールバーのスナップ"</string>
+    <string name="undo" formatted="false">"元に戻す"</string>
+    <string name="redo" formatted="false">"やり直す"</string>
+    <string name="pen" formatted="false">"ペン"</string>
+    <string name="highlighter" formatted="false">"蛍光ペン"</string>
+    <string name="eraser" formatted="false">"消しゴム"</string>
+    <string name="lasso" formatted="false">"投げ縄"</string>
+    <string name="reorder_before" formatted="false">"前に並べ替える"</string>
+    <string name="reorder_after" formatted="false">"後ろに並べ替える"</string>
+    <string name="collapse_styles" formatted="false">"色と太さを折りたたむ"</string>
+    <string name="expand_styles" formatted="false">"色と太さを表示"</string>
+    <string name="toolbar_description" formatted="false">"辺と四隅にスナップするツールバー"</string>
+    <string name="open_toolbar" formatted="false">"ツールバーを開く"</string>
+    <string name="dragging_tool" formatted="false">"並べ替え中のツール"</string>
+    <string name="highlighter_color" formatted="false">"蛍光ペンの色"</string>
+    <string name="folder_color" formatted="false">"フォルダの色"</string>
+    <string name="canvas_description" formatted="false">"手書きキャンバス。ペンで筆記、指では描画しません"</string>
+    <string name="png_failed" formatted="false">"PNGを作成できません"</string>
+    <string name="export_failed">"出力に失敗しました：%1$s"</string>
+    <string name="open_note_background" formatted="false">"ノートの背景を開く"</string>
+    <string name="export_pdf" formatted="false">"PDFでエクスポート"</string>
+    <string name="export_png" formatted="false">"PNGでエクスポート"</string>
+    <string name="export_complete" formatted="false">"エクスポートしました"</string>
+    <string name="capture_clip_label" formatted="false">"選択範囲のキャプチャー"</string>
+    <string name="selection" formatted="false">"選択範囲"</string>
+    <string name="share_capture" formatted="false">"キャプチャーを共有"</string>
+    <string name="paper_preview" formatted="false">"用紙のプレビュー"</string>
+    <string name="background_color" formatted="false">"背景色"</string>
+    <string name="rule_color" formatted="false">"罫線の色"</string>
+    <string name="paper_plain" formatted="false">"無地"</string>
+    <string name="paper_ruled" formatted="false">"横罫"</string>
+    <string name="paper_grid" formatted="false">"方眼"</string>
+    <string name="paper_dots" formatted="false">"ドット"</string>
+    <string name="line_spacing">"罫線の間隔：%1$s"</string>
+    <string name="line_width">"ドット・罫線の太さ：%1$s"</string>
+    <string name="lower_button" formatted="false">"下ボタン"</string>
+    <string name="upper_button" formatted="false">"上ボタン"</string>
+    <string name="independent_button" formatted="false">"独立ボタン"</string>
+    <string name="action_none" formatted="false">"割り当てなし"</string>
+    <string name="temporary_eraser" formatted="false">"一時消しゴム"</string>
+    <string name="reset_zoom" formatted="false">"拡大率を100%に戻す"</string>
+    <string name="temporary_lasso" formatted="false">"一時投げ縄"</string>
+    <string name="change_color" formatted="false">"色を変更"</string>
+    <string name="width" formatted="false">"太さ"</string>
+    <string name="retry_settings" formatted="false">"設定の保存を再試行"</string>
+    <string name="width_slot">"太さの保存枠%1$s：%2$s"</string>
+    <string name="edit_width_preset" formatted="false">"太さのテンプレートを編集"</string>
+    <string name="duplicate_selection" formatted="false">"選択した筆跡を複製"</string>
+    <string name="capture_selection" formatted="false">"選択範囲をキャプチャー"</string>
+    <string name="delete_selection" formatted="false">"選択した筆跡を削除"</string>
+    <string name="clear_selection" formatted="false">"選択を解除"</string>
+    <string name="share" formatted="false">"共有する"</string>
+    <string name="copied_to_clipboard" formatted="false">"クリップボードにコピーしました"</string>
+    <string name="capture_failed" formatted="false">"キャプチャーに失敗しました"</string>
+    <string name="width_preset">"太さのテンプレート %1$s"</string>
+    <string name="settings_content" formatted="false">"設定の内容"</string>
+    <string name="back" formatted="false">"戻る"</string>
+    <string name="appearance" formatted="false">"外観"</string>
+    <string name="pen_settings" formatted="false">"ペン設定"</string>
+    <string name="note_defaults" formatted="false">"ノート設定"</string>
+    <string name="language" formatted="false">"言語"</string>
+    <string name="settings" formatted="false">"総合設定"</string>
+    <string name="theme" formatted="false">"テーマ"</string>
+    <string name="choose_theme" formatted="false">"テーマを選択"</string>
+    <string name="suppress_gestures" formatted="false">"ペンのシステムジェスチャーを抑制"</string>
+    <string name="suppress_gestures_help" formatted="false">"ペンが近い間はノートの戻る操作を無視し、ペン付近の画面端ジェスチャーを抑制します。ホームなどOSで必須の操作は抑制できない場合があります。"</string>
+    <string name="pressure_strength" formatted="false">"筆圧と強さ"</string>
+    <string name="open_pressure_strength" formatted="false">"筆圧と強さを開く"</string>
+    <string name="new_note_background" formatted="false">"新しいノートの背景"</string>
+    <string name="follow_device" formatted="false">"端末に合わせる"</string>
+    <string name="language_japanese" formatted="false">"日本語"</string>
+    <string name="language_change_failed">"言語を変更できません：%1$s"</string>
+    <string name="language_save_failed" formatted="false">"言語設定を保存できませんでした"</string>
+    <string name="recovered_notice" formatted="false">"前回の保存データから復元しました。内容を確認してください。"</string>
+    <string name="retry" formatted="false">"再試行"</string>
+    <string name="parent_folder_drop" formatted="false">"上のフォルダへ戻る。ノートをドロップして移動"</string>
+    <string name="notes" formatted="false">"ノート"</string>
+    <string name="sort_order">"並び順：%1$s"</string>
+    <string name="manual_order" formatted="false">"任意順"</string>
+    <string name="descending" formatted="false">"降順"</string>
+    <string name="ascending" formatted="false">"昇順"</string>
+    <string name="list_view" formatted="false">"リスト表示"</string>
+    <string name="grid_view" formatted="false">"グリッド表示"</string>
+    <string name="empty_library" formatted="false">"右下の＋からノートを作成できます。長押しでフォルダを作成できます。"</string>
+    <string name="create_folder" formatted="false">"フォルダを作成"</string>
+    <string name="create_note_description" formatted="false">"新しいノート。長押しでフォルダを作成"</string>
+    <string name="dragging_note" formatted="false">"ドラッグ中のノート"</string>
+    <string name="new_note" formatted="false">"新しいノート"</string>
+    <string name="rename_note" formatted="false">"ノート名変更"</string>
+    <string name="rename_folder" formatted="false">"フォルダ名変更"</string>
+    <string name="confirm_delete">"「%1$s」を削除しますか"</string>
+    <string name="delete_note_help" formatted="false">"このノートの筆跡も削除されます。"</string>
+    <string name="delete" formatted="false">"削除"</string>
+    <string name="folder_description">"フォルダ：%1$s"</string>
+    <string name="folder_actions" formatted="false">"フォルダの操作"</string>
+    <string name="rename" formatted="false">"名前変更"</string>
+    <string name="move_here" formatted="false">"ここへ移動"</string>
+    <string name="note_actions" formatted="false">"ノートの操作"</string>
+    <string name="export" formatted="false">"エクスポート"</string>
+    <string name="created_time" formatted="false">"作成時刻"</string>
+    <string name="updated_time" formatted="false">"更新時刻"</string>
+    <string name="note_thumbnail">"%1$sの先頭1000×1000"</string>
+    <string name="relative_width" formatted="false">"太さ（設定値の0〜100%）"</string>
+    <string name="pressure_curve_description" formatted="false">"筆圧と太さの通過点式ベジェ曲線。空白をタップして点を追加、点をドラッグして移動、選択点の四角いハンドルで曲がり方を調整、正方形から大きく離すと点を削除"</string>
+    <string name="point_left" formatted="false">"選択点を左へ"</string>
+    <string name="point_right" formatted="false">"選択点を右へ"</string>
+    <string name="point_up" formatted="false">"選択点を上へ"</string>
+    <string name="point_down" formatted="false">"選択点を下へ"</string>
+    <string name="pressure_zero" formatted="false">"筆圧0%"</string>
+    <string name="pressure_full" formatted="false">"筆圧100%"</string>
+    <string name="add_curve_point" formatted="false">"通過点を追加"</string>
+    <string name="reset_handles" formatted="false">"選択点のハンドルを自動調整に戻す"</string>
+    <string name="delete_curve_point" formatted="false">"選択した通過点を削除"</string>
+    <string name="theme_light" formatted="false">"ライト"</string>
+    <string name="theme_dark" formatted="false">"ダーク"</string>
+    <string name="storage_name_conflict">"保存用フォルダ「%1$s」と同名のファイルがあります"</string>
+    <string name="storage_create_failed" formatted="false">"保存用フォルダを作成できません"</string>
+    <string name="storage_file_too_large" formatted="false">"保存ファイルが大きすぎます"</string>
+    <string name="storage_file_read_failed" formatted="false">"保存ファイルを読み込めません"</string>
+    <string name="storage_data_invalid" formatted="false">"保存データを確認できません"</string>
+    <string name="storage_write_unverified" formatted="false">"保存先への書き込みを確認できません"</string>
+    <string name="storage_organize_failed" formatted="false">"保存ファイルを整理できません"</string>
+    <string name="sort_name_asc" formatted="false">"名前（昇順）"</string>
+    <string name="sort_name_desc" formatted="false">"名前（降順）"</string>
+    <string name="sort_created_asc" formatted="false">"作成日（昇順）"</string>
+    <string name="sort_created_desc" formatted="false">"作成日（降順）"</string>
+    <string name="sort_updated_asc" formatted="false">"更新日（昇順）"</string>
+    <string name="sort_updated_desc" formatted="false">"更新日（降順）"</string>
+    <string name="sort_manual" formatted="false">"任意"</string>
+    <string name="sort_name" formatted="false">"名前"</string>
+    <string name="sort_created" formatted="false">"作成日"</string>
+    <string name="sort_updated" formatted="false">"更新日"</string>
+    <string name="folder_not_empty" formatted="false">"空のフォルダのみ削除できます"</string>
+    <string name="storage_read_retained" formatted="false">"保存先のデータを読み込めません。アプリ内のデータを保持しています。"</string>
+    <string name="storage_corrupt" formatted="false">"保存先のデータが破損しています"</string>
+    <string name="storage_commit_failed" formatted="false">"保存先の確定に失敗しました"</string>
+    <string name="storage_selected" formatted="false">"指定したフォルダ"</string>
+    <string name="storage_restore_failed" formatted="false">"保存先変更前のノートを復元できません"</string>
+    <string name="storage_unavailable" formatted="false">"保存先に接続できません"</string>
+    <string name="storage_different_data" formatted="false">"この保存先には異なるデータがあります。現在のノート・フォルダを上書きしないよう、空の保存先を選んでください。"</string>
+    <string name="storage_choice_save_failed" formatted="false">"保存先の設定を保存できません"</string>
+    <string name="storage_unreadable_notes" formatted="false">"保存先に読み込めないノートがあります"</string>
+    <string name="storage_change_incomplete" formatted="false">"前回の保存先変更を完了できませんでした。アプリ内のデータを保持しています。"</string>
+    <string name="unreadable_note" formatted="false">"読み込めないノート"</string>
+    <string name="note_data_read_failed" formatted="false">"保存データを読み込めません"</string>
+    <string name="note_format_invalid" formatted="false">"ノートの形式が正しくありません"</string>
+    <string name="save_unsuccessful" formatted="false">"保存できませんでした"</string>
+    <string name="storage_select_failed">"保存先を指定できません：%1$s"</string>
+    <string name="storage_location" formatted="false">"ノートの保存先"</string>
+    <string name="choose_folder" formatted="false">"フォルダを指定"</string>
+    <string name="restore_default" formatted="false">"デフォルトに戻す"</string>
+    <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。指定した保存先に、用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
+    <string name="app_name" formatted="false">"Misq notes"</string>
+    <string name="stroke_cache">筆跡キャッシュ</string>
+    <string name="stroke_cache_limited">128本まで（省メモリ）</string>
+    <string name="stroke_cache_visible">画面内すべて</string>
+    <string name="stroke_cache_nearby">画面内＋前後1画面（標準）</string>
+    <string name="stroke_cache_all">ノート全体</string>
+    <string name="stroke_cache_help">保持量を増やすとスクロールが滑らかになり、メモリ使用量が増えます。画面外の筆跡は操作の合間に準備します。</string>
+    <string name="paper_college_ruled">カレッジ罫</string>
+    <string name="margin_color">縦罫線の色</string>
+    <string name="margin_width">縦罫線の太さ：%1$s</string>
+    <string name="margin_offset">左端からの距離：%1$s</string>
+    <string name="import_photo">写真を取り込む</string>
+    <string name="import_pdf">PDFを取り込む</string>
+    <string name="import_complete">ノートに取り込みました。元ファイルを削除しても表示できます。</string>
+    <string name="import_failed">取り込めませんでした：%1$s</string>
+    <string name="import_save_failed">取り込んだ内容を保存できませんでした。保存を再試行してください。</string>
+</resources>

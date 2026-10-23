@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="storage_conflict">The storage location also has changes. Both versions are preserved. Choose another empty location to save the version on this device.</string>
+    <string name="storage_incoming">Updates were downloaded. Reopen the app to apply them.</string>
+    <string name="lasso_free">Free</string>
+    <string name="lasso_rectangle">Rectangle</string>
+    <string name="insert_space">Insert space</string>
+    <string name="insert_space_drag">Drag the center circle up or down to adjust the space. Start writing or touch outside the circle to apply. Touch with two fingers to cancel.</string>
+    <string name="insert_space_empty">There are no strokes below this position.</string>
+    <string name="pen_color" formatted="false">"Pen color"</string>
+    <string name="opacity" formatted="false">"Opacity"</string>
+    <string name="save_rgb" formatted="false">"Save this color"</string>
+    <string name="remove_rgb" formatted="false">"Remove this saved color"</string>
+    <string name="retry_save" formatted="false">"Retry saving"</string>
+    <string name="discard" formatted="false">"Discard changes"</string>
+    <string name="apply" formatted="false">"Apply"</string>
+    <string name="color_preview" formatted="false">"Color preview"</string>
+    <string name="color_picker" formatted="false">"Saturation and brightness picker"</string>
+    <string name="increase_saturation" formatted="false">"Increase saturation"</string>
+    <string name="decrease_saturation" formatted="false">"Decrease saturation"</string>
+    <string name="increase_brightness" formatted="false">"Increase brightness"</string>
+    <string name="decrease_brightness" formatted="false">"Decrease brightness"</string>
+    <string name="hue" formatted="false">"Hue"</string>
+    <string name="open_palette" formatted="false">"Open color palette"</string>
+    <string name="popover_animation" formatted="false">"Popover visibility"</string>
+    <string name="close" formatted="false">"Close"</string>
+    <string name="back_again" formatted="false">"Press back again to return to notes list"</string>
+    <string name="back_to_notes" formatted="false">"Back to notes"</string>
+    <string name="note_settings" formatted="false">"Note settings"</string>
+    <string name="zoom_level">"Zoom %1$s%%"</string>
+    <string name="zoom_notice">"Current zoom: %1$s%%"</string>
+    <string name="saving" formatted="false">"Saving"</string>
+    <string name="note_background" formatted="false">"Note background"</string>
+    <string name="storage_default" formatted="false">"Default (in the app)"</string>
+    <string name="library_load_failed">"Could not load library settings: %1$s"</string>
+    <string name="library_save_failed">"Could not save library settings: %1$s"</string>
+    <string name="palette_load_failed">"Could not load saved colors: %1$s"</string>
+    <string name="palette_save_failed">"Could not save colors: %1$s"</string>
+    <string name="widths_load_failed">"Could not load width settings: %1$s"</string>
+    <string name="settings_save_failed">"Could not save settings: %1$s"</string>
+    <string name="save_failed">"Could not save: %1$s"</string>
+    <string name="wait_library" formatted="false">"Wait for the library to finish saving before changing the location"</string>
+    <string name="wait_note" formatted="false">"Wait for notes to finish saving before changing the location"</string>
+    <string name="wait_palette" formatted="false">"Wait for the palette to finish saving before changing the location"</string>
+    <string name="wait_pen" formatted="false">"Wait for pen settings to finish saving before changing the location"</string>
+    <string name="retry_library" formatted="false">"Please retry saving the library"</string>
+    <string name="retry_note" formatted="false">"Please retry saving notes"</string>
+    <string name="retry_palette" formatted="false">"Please retry saving the palette"</string>
+    <string name="retry_pen" formatted="false">"Please retry saving pen settings"</string>
+    <string name="untitled" formatted="false">"Untitled"</string>
+    <string name="folder_save_failed" formatted="false">"Could not save the folder"</string>
+    <string name="wait_stroke_back" formatted="false">"Finishing your stroke. Try returning to your notes again."</string>
+    <string name="operation_failed" formatted="false">"The operation failed"</string>
+    <string name="new_folder" formatted="false">"New folder"</string>
+    <string name="wait_stroke_action" formatted="false">"Wait for the stroke to finish before continuing"</string>
+    <string name="wait_stroke_export" formatted="false">"Wait for the stroke to finish before exporting"</string>
+    <string name="pdf_too_many_pages" formatted="false">"The PDF has too many pages"</string>
+    <string name="pagination_failed" formatted="false">"Could not determine the page breaks"</string>
+    <string name="toolbar_animation" formatted="false">"Toolbar snap"</string>
+    <string name="undo" formatted="false">"Undo"</string>
+    <string name="redo" formatted="false">"Redo"</string>
+    <string name="pen" formatted="false">"Pen"</string>
+    <string name="highlighter" formatted="false">"Highlighter"</string>
+    <string name="eraser" formatted="false">"Eraser"</string>
+    <string name="lasso" formatted="false">"Lasso"</string>
+    <string name="reorder_before" formatted="false">"Move earlier"</string>
+    <string name="reorder_after" formatted="false">"Move later"</string>
+    <string name="collapse_styles" formatted="false">"Collapse colors and widths"</string>
+    <string name="expand_styles" formatted="false">"Show colors and widths"</string>
+    <string name="toolbar_description" formatted="false">"Toolbar that snaps to edges and corners"</string>
+    <string name="open_toolbar" formatted="false">"Open toolbar"</string>
+    <string name="dragging_tool" formatted="false">"Tool being reordered"</string>
+    <string name="highlighter_color" formatted="false">"Highlighter color"</string>
+    <string name="folder_color" formatted="false">"Folder color"</string>
+    <string name="canvas_description" formatted="false">"Handwriting canvas. Write with a pen; fingers do not draw."</string>
+    <string name="png_failed" formatted="false">"Could not create the PNG"</string>
+    <string name="export_failed">"Export failed: %1$s"</string>
+    <string name="open_note_background" formatted="false">"Open note background settings"</string>
+    <string name="export_pdf" formatted="false">"Export as PDF"</string>
+    <string name="export_png" formatted="false">"Export as PNG"</string>
+    <string name="export_complete" formatted="false">"Exported"</string>
+    <string name="capture_clip_label" formatted="false">"Selection capture"</string>
+    <string name="selection" formatted="false">"Selection"</string>
+    <string name="share_capture" formatted="false">"Share capture"</string>
+    <string name="paper_preview" formatted="false">"Paper preview"</string>
+    <string name="background_color" formatted="false">"Background color"</string>
+    <string name="rule_color" formatted="false">"Line color"</string>
+    <string name="paper_plain" formatted="false">"Plain"</string>
+    <string name="paper_ruled" formatted="false">"Ruled"</string>
+    <string name="paper_grid" formatted="false">"Grid"</string>
+    <string name="paper_dots" formatted="false">"Dots"</string>
+    <string name="line_spacing">"Line spacing: %1$s"</string>
+    <string name="line_width">"Dot and line width: %1$s"</string>
+    <string name="lower_button" formatted="false">"Lower button"</string>
+    <string name="upper_button" formatted="false">"Upper button"</string>
+    <string name="independent_button" formatted="false">"Independent button"</string>
+    <string name="action_none" formatted="false">"No action"</string>
+    <string name="temporary_eraser" formatted="false">"Temporary eraser"</string>
+    <string name="reset_zoom" formatted="false">"Reset zoom to 100%"</string>
+    <string name="temporary_lasso" formatted="false">"Temporary lasso"</string>
+    <string name="change_color" formatted="false">"Change color"</string>
+    <string name="width" formatted="false">"Width"</string>
+    <string name="retry_settings" formatted="false">"Retry saving settings"</string>
+    <string name="width_slot">"Width preset %1$s: %2$s"</string>
+    <string name="edit_width_preset" formatted="false">"Edit width preset"</string>
+    <string name="duplicate_selection" formatted="false">"Duplicate selected strokes"</string>
+    <string name="capture_selection" formatted="false">"Capture selection"</string>
+    <string name="delete_selection" formatted="false">"Delete selected strokes"</string>
+    <string name="clear_selection" formatted="false">"Clear selection"</string>
+    <string name="share" formatted="false">"Share"</string>
+    <string name="copied_to_clipboard" formatted="false">"Copied to clipboard"</string>
+    <string name="capture_failed" formatted="false">"Could not capture the selection"</string>
+    <string name="width_preset">"Width preset %1$s"</string>
+    <string name="settings_content" formatted="false">"Settings content"</string>
+    <string name="back" formatted="false">"Back"</string>
+    <string name="appearance" formatted="false">"Appearance"</string>
+    <string name="pen_settings" formatted="false">"Pen settings"</string>
+    <string name="note_defaults" formatted="false">"Note settings"</string>
+    <string name="language" formatted="false">"Language"</string>
+    <string name="settings" formatted="false">"Settings"</string>
+    <string name="theme" formatted="false">"Theme"</string>
+    <string name="choose_theme" formatted="false">"Choose theme"</string>
+    <string name="suppress_gestures" formatted="false">"Suppress system gestures with the pen"</string>
+    <string name="suppress_gestures_help" formatted="false">"While the pen is nearby, ignore back navigation in notes and suppress edge gestures near the pen. Required system gestures, such as Home, may still work."</string>
+    <string name="pressure_strength" formatted="false">"Pressure and strength"</string>
+    <string name="open_pressure_strength" formatted="false">"Open pressure and strength"</string>
+    <string name="new_note_background" formatted="false">"Background for new notes"</string>
+    <string name="follow_device" formatted="false">"Follow device"</string>
+    <string name="language_japanese" formatted="false">"日本語"</string>
+    <string name="language_change_failed">"Could not change the language: %1$s"</string>
+    <string name="language_save_failed" formatted="false">"Could not save the language setting"</string>
+    <string name="recovered_notice" formatted="false">"Restored the previous saved version. Please check your notes."</string>
+    <string name="retry" formatted="false">"Retry"</string>
+    <string name="parent_folder_drop" formatted="false">"Go to the parent folder. Drop a note here to move it."</string>
+    <string name="notes" formatted="false">"Notes"</string>
+    <string name="sort_order">"Sort by: %1$s"</string>
+    <string name="manual_order" formatted="false">"Custom order"</string>
+    <string name="descending" formatted="false">"Descending"</string>
+    <string name="ascending" formatted="false">"Ascending"</string>
+    <string name="list_view" formatted="false">"List view"</string>
+    <string name="grid_view" formatted="false">"Grid view"</string>
+    <string name="empty_library" formatted="false">"Tap + at the bottom right to create a note. Press and hold to create a folder."</string>
+    <string name="create_folder" formatted="false">"Create folder"</string>
+    <string name="create_note_description" formatted="false">"New note. Press and hold to create a folder."</string>
+    <string name="dragging_note" formatted="false">"Note being dragged"</string>
+    <string name="new_note" formatted="false">"New note"</string>
+    <string name="rename_note" formatted="false">"Rename note"</string>
+    <string name="rename_folder" formatted="false">"Rename folder"</string>
+    <string name="confirm_delete">"Delete “%1$s”?"</string>
+    <string name="delete_note_help" formatted="false">"All strokes in this note will also be deleted."</string>
+    <string name="delete" formatted="false">"Delete"</string>
+    <string name="folder_description">"Folder: %1$s"</string>
+    <string name="folder_actions" formatted="false">"Folder actions"</string>
+    <string name="rename" formatted="false">"Rename"</string>
+    <string name="move_here" formatted="false">"Move here"</string>
+    <string name="note_actions" formatted="false">"Note actions"</string>
+    <string name="export" formatted="false">"Export"</string>
+    <string name="created_time" formatted="false">"Created"</string>
+    <string name="updated_time" formatted="false">"Updated"</string>
+    <string name="note_thumbnail">"First 1000 × 1000 of %1$s"</string>
+    <string name="relative_width" formatted="false">"Width (0–100% of the selected width)"</string>
+    <string name="pressure_curve_description" formatted="false">"Pressure-to-width Bézier curve. Tap empty space to add a point, drag a point to move it, use the square handles to adjust its curve, or drag it well outside the graph to delete it."</string>
+    <string name="point_left" formatted="false">"Move selected point left"</string>
+    <string name="point_right" formatted="false">"Move selected point right"</string>
+    <string name="point_up" formatted="false">"Move selected point up"</string>
+    <string name="point_down" formatted="false">"Move selected point down"</string>
+    <string name="pressure_zero" formatted="false">"Pressure 0%"</string>
+    <string name="pressure_full" formatted="false">"Pressure 100%"</string>
+    <string name="add_curve_point" formatted="false">"Add curve point"</string>
+    <string name="reset_handles" formatted="false">"Reset selected point handles to automatic"</string>
+    <string name="delete_curve_point" formatted="false">"Delete selected curve point"</string>
+    <string name="theme_light" formatted="false">"Light"</string>
+    <string name="theme_dark" formatted="false">"Dark"</string>
+    <string name="storage_name_conflict">"A file named “%1$s” is blocking the storage folder"</string>
+    <string name="storage_create_failed" formatted="false">"Could not create the storage folder"</string>
+    <string name="storage_file_too_large" formatted="false">"The saved file is too large"</string>
+    <string name="storage_file_read_failed" formatted="false">"Could not read the saved file"</string>
+    <string name="storage_data_invalid" formatted="false">"Could not verify the saved data"</string>
+    <string name="storage_write_unverified" formatted="false">"Could not verify the write to the storage folder"</string>
+    <string name="storage_organize_failed" formatted="false">"Could not organize the saved files"</string>
+    <string name="sort_name_asc" formatted="false">"Name (ascending)"</string>
+    <string name="sort_name_desc" formatted="false">"Name (descending)"</string>
+    <string name="sort_created_asc" formatted="false">"Created (ascending)"</string>
+    <string name="sort_created_desc" formatted="false">"Created (descending)"</string>
+    <string name="sort_updated_asc" formatted="false">"Updated (ascending)"</string>
+    <string name="sort_updated_desc" formatted="false">"Updated (descending)"</string>
+    <string name="sort_manual" formatted="false">"Custom"</string>
+    <string name="sort_name" formatted="false">"Name"</string>
+    <string name="sort_created" formatted="false">"Created"</string>
+    <string name="sort_updated" formatted="false">"Updated"</string>
+    <string name="folder_not_empty" formatted="false">"Only empty folders can be deleted"</string>
+    <string name="storage_read_retained" formatted="false">"Could not read the storage folder. The copy in the app has been kept."</string>
+    <string name="storage_corrupt" formatted="false">"The data in the storage folder is damaged"</string>
+    <string name="storage_commit_failed" formatted="false">"Could not finish saving to the storage folder"</string>
+    <string name="storage_selected" formatted="false">"Selected folder"</string>
+    <string name="storage_restore_failed" formatted="false">"Could not restore the notes from before the storage change"</string>
+    <string name="storage_unavailable" formatted="false">"The storage folder is unavailable"</string>
+    <string name="storage_different_data" formatted="false">"This folder contains different data. Choose an empty folder to avoid overwriting notes and folders."</string>
+    <string name="storage_choice_save_failed" formatted="false">"Could not save the storage location setting"</string>
+    <string name="storage_unreadable_notes" formatted="false">"Some notes in the storage folder could not be read"</string>
+    <string name="storage_change_incomplete" formatted="false">"The previous storage change did not finish. The copy in the app has been kept."</string>
+    <string name="unreadable_note" formatted="false">"Unreadable note"</string>
+    <string name="note_data_read_failed" formatted="false">"Could not read the saved data"</string>
+    <string name="note_format_invalid" formatted="false">"The note format is invalid"</string>
+    <string name="save_unsuccessful" formatted="false">"Could not save"</string>
+    <string name="storage_select_failed">"Could not select the storage folder: %1$s"</string>
+    <string name="storage_location" formatted="false">"Note storage location"</string>
+    <string name="choose_folder" formatted="false">"Choose folder"</string>
+    <string name="restore_default" formatted="false">"Use default"</string>
+    <string name="storage_help" formatted="false">"Your notes and folders move with you. Paper defaults, color palettes and width presets are also saved in the selected location."</string>
+    <string name="app_name" formatted="false">"Misq notes"</string>
+    <string name="stroke_cache">Stroke cache</string>
+    <string name="stroke_cache_limited">Up to 128 strokes (less memory)</string>
+    <string name="stroke_cache_visible">All strokes on screen</string>
+    <string name="stroke_cache_nearby">On screen and one screen above and below (default)</string>
+    <string name="stroke_cache_all">Entire note</string>
+    <string name="stroke_cache_help">Keeping more strokes improves scrolling and uses more memory. Off-screen strokes are prepared between interactions.</string>
+    <string name="paper_college_ruled">College ruled</string>
+    <string name="margin_color">Vertical line color</string>
+    <string name="margin_width">Vertical line width: %1$s</string>
+    <string name="margin_offset">Distance from left edge: %1$s</string>
+    <string name="import_photo">Import photo</string>
+    <string name="import_pdf">Import PDF</string>
+    <string name="import_complete">Imported into this note. The original file can be deleted.</string>
+    <string name="import_failed">Could not import: %1$s</string>
+    <string name="import_save_failed">Could not save imported content. Please retry saving.</string>
+</resources>

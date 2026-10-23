@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 128 128" fill="none">
+  <title>ペンの輪郭</title>
+  <desc>左下にペン先を向け、45度に傾けたペンとプラス。中央の輪郭を取り除き、後端側の左上とペン先側の右下からさらに削った各16√2の線分は、残った輪郭の端から1/3ずつ復元。∽の開きを保ち、プラスを画像中央に配置。背景は#424f70、ストロークは#a6b8c9、右下の硬い影は#1c1f3f。</desc>
+  <defs>
+    <filter id="stroke-shadow" x="-16" y="-16" width="160" height="160" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="1.5" dy="1.5" stdDeviation="0" flood-color="#1c1f3f" flood-opacity="1"/>
+    </filter>
+  </defs>
+  <rect width="128" height="128" fill="#424f70"/>
+  <g transform="translate(-3 3)" filter="url(#stroke-shadow)" stroke="#a6b8c9" stroke-width="6.6666666667" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M56.3333333333 87.6666666667 49 95 27 101 33 79 51 61"/>
+    <path d="M77.6666666667 34.3333333333 84 28C89 23 94 23 99 28L100 29C105 34 105 39 100 44L83 61"/>
+    <path d="M51 61H83M67 45V77"/>
+  </g>
+</svg>
