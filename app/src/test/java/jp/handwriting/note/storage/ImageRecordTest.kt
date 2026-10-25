@@ -68,4 +68,31 @@ class ImageRecordTest {
         assertThrows(IllegalArgumentException::class.java) { image.copy(top = Float.NaN) }
         assertThrows(IllegalArgumentException::class.java) { image.copy(width = -1f) }
     }
+
+    @Test fun resizingPreservesAspectRatioPositionAndEmbeddedBytesAfterReload() {
+        val image = ImageRecord(ImageData(png()), 20f, 40f, 600f, 400f)
+        val resized = image.resized(0.5f)
+        assertEquals(20f, resized.left, 0f); assertEquals(40f, resized.top, 0f)
+        assertEquals(300f, resized.width, 0f); assertEquals(200f, resized.height, 0f)
+        assertSame(image.data, resized.data)
+        val restored = ImageRecord.decode(resized.encode())
+        assertEquals(resized.width, restored.width, 0f)
+        assertEquals(resized.height, restored.height, 0f)
+        assertArrayEquals(image.data.png, restored.data.png)
+        for (factor in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY)) {
+            assertThrows(IllegalArgumentException::class.java) { image.resized(factor) }
+        }
+    }
+    @Test fun centeredResizeKeepsTheImageCenterAndHandleResizeKeepsTheTopLeft() {
+        val image = ImageRecord(ImageData(png()), 200f, 200f, 400f, 300f)
+        for (factor in listOf(0.5f, 1.5f)) {
+            val centered = image.resizedFromCenter(factor)
+            assertEquals(400f, centered.left + centered.width / 2f, 0f)
+            assertEquals(350f, centered.top + centered.height / 2f, 0f)
+            assertSame(image.data, centered.data)
+            val handle = image.resized(factor)
+            assertEquals(image.left, handle.left, 0f)
+            assertEquals(image.top, handle.top, 0f)
+        }
+    }
 }

@@ -68,6 +68,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     }
     CompositionLocalProvider(LocalColorPreviewBackground provides workspace.current?.paper?.color?.let { Color(it) }) {
     NotebookTheme(library.value.theme, library.value.amoled) {
+        val importDocument = rememberDocumentImporter(model)
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Box(Modifier.fillMaxSize().safeDrawingPadding()) {
                     AndroidView(
@@ -97,6 +98,8 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                             onToolOrder = model::toolOrder,
                             onLassoMode = model::chooseLassoMode,
                             onDockChange = { toolbarDock = it },
+                            onImport = importDocument,
+                            onLassoIncludeMedia = model::lassoIncludeMedia,
                         )
                         }
                     }

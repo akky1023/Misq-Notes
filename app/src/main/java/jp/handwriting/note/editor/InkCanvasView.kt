@@ -95,11 +95,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             val visible = model.visibleStrokeEntries()
             updateRetention(visible)
             strokeCache.draw(canvas, visible, model.viewport.position,
-                width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes) { target, entry, selected ->
+                width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes, model.selectionScale) { target, entry, selected ->
                 target.save()
                 target.concat(strokeToView)
                 if (selected) target.translate(model.selectionOffset.x, model.selectionOffset.y)
-                if (entry.image != null) EmbeddedImages.draw(target, entry.image)
+                if (entry.image != null) EmbeddedImages.draw(target, if (selected) entry.image.resized(model.selectionScale) else entry.image)
                 else renderer.draw(target, strokeFidelity.get(entry.ink), strokeToView)
                 target.restore()
             }
@@ -127,6 +127,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var longPressPoint: WorldPoint? = null
     private var longPressWorldY = 0f
+    private var longPressPointerId = 0
     private var canvasMenu: PopupWindow? = null
     private var spaceInsertionY: Float? = null
     private var spaceDragStart: Float? = null
@@ -185,8 +186,17 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         val point = longPressPoint
         if (point != null && fingerStart != null && !stylusNear && !model.edits.busy && !model.selectionComputing) {
             val y = longPressWorldY
+            val device = fingerDevice
             finishFingerGesture(canceled = true)
-            showCanvasMenu(point, y)
+            val x = model.viewport.worldX(point.x)
+            if (model.selectImportedImage(x, y)) {
+                fingerDevice = device; fingerStart = model.viewport.position
+                fingerSelectionId = longPressPointerId
+                selectionMoving = true; selectionStart = WorldPoint(x, y)
+                model.beginSelectionGesture()
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                completed.invalidate(); invalidate()
+            } else showCanvasMenu(point, y)
         }
     }
 
@@ -229,6 +239,16 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var lasso: MutableList<WorldPoint>? = null
     private var lassoMode = LassoMode.FREE
     private var selectionMoving = false
+    private var imageResizing = false
+    private var imagePinching = false
+    private var imagePinchSpan = 0f
+    private var imagePinchScale = 1f
+    private var imagePinchCenter = WorldPoint(0f, 0f)
+    private val resizeHandleRadius get() = 12f * resources.displayMetrics.density
+    private fun resizeHandle(): WorldPoint? = model.resizableImage?.let { image ->
+        WorldPoint(model.viewport.screenX(image.left + image.width * model.selectionScale + model.selectionOffset.x),
+            model.viewport.screenY(image.top + image.height * model.selectionScale + model.selectionOffset.y))
+    }
     private var selectionStart = WorldPoint(0f, 0f)
     private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(36, 94, 112); style = Paint.Style.STROKE; strokeWidth = 2f
@@ -468,7 +488,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             val x = model.viewport.worldX(if (h < event.historySize) event.getHistoricalX(i, h) else event.getX(i))
             val y = model.viewport.worldY(if (h < event.historySize) event.getHistoricalY(i, h) else event.getY(i))
             if (!x.isFinite() || !y.isFinite()) continue
-            if (selectionMoving) model.previewSelectionMove(x - selectionStart.x, y - selectionStart.y)
+            if (imageResizing) model.resizableImage?.let { image ->
+                val dx = x - selectionStart.x; val dy = y - selectionStart.y
+                model.previewImageResize(1f + (dx * image.width + dy * image.height) / (image.width * image.width + image.height * image.height))
+            }
+            else if (selectionMoving) model.previewSelectionMove(x - selectionStart.x, y - selectionStart.y)
             else lasso?.let { points ->
                 if (lassoMode == LassoMode.RECTANGLE) {
                     points.clear()
@@ -510,7 +534,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         pointerId = null; activeDevice = null; drawing = null; erasing = null; cursor = null
         model.penButton.endContact()
         model.buttonChanged()
-        lasso = null; selectionMoving = false
+        lasso = null; selectionMoving = false; imageResizing = false; imagePinching = false
         invalidate()
     }
     /** No synchronous render-thread flush during drawing. Only completed inputs survive recreation. */
@@ -550,10 +574,19 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             val dx = model.selectionOffset.x; val dy = model.selectionOffset.y
             val left = model.viewport.screenX(b.left + dx) - 4f
             val top = model.viewport.screenY(b.top + dy) - 4f
-            val right = model.viewport.screenX(b.right + dx) + 4f
-            val bottom = model.viewport.screenY(b.bottom + dy) + 4f
+            val right = model.viewport.screenX(b.left + (b.right - b.left) * model.selectionScale + dx) + 4f
+            val bottom = model.viewport.screenY(b.top + (b.bottom - b.top) * model.selectionScale + dy) + 4f
             canvas.drawRect(left, top, right, bottom, selectionFill)
             canvas.drawRect(left, top, right, bottom, selectionPaint)
+            resizeHandle()?.let { handle ->
+                canvas.drawCircle(handle.x, handle.y, resizeHandleRadius, spaceHandleFill)
+                val r = resizeHandleRadius * 0.45f
+                canvas.drawLine(handle.x - r, handle.y - r, handle.x + r, handle.y + r, spaceHandleIcon)
+                canvas.drawLine(handle.x - r, handle.y - r, handle.x - r, handle.y, spaceHandleIcon)
+                canvas.drawLine(handle.x - r, handle.y - r, handle.x, handle.y - r, spaceHandleIcon)
+                canvas.drawLine(handle.x + r, handle.y + r, handle.x + r, handle.y, spaceHandleIcon)
+                canvas.drawLine(handle.x + r, handle.y + r, handle.x, handle.y + r, spaceHandleIcon)
+            }
         }
         lasso?.takeIf { it.isNotEmpty() }?.let { points ->
             val path = Path()
@@ -616,7 +649,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             if (model.ui.value.busy || event.getToolType(event.actionIndex) != MotionEvent.TOOL_TYPE_FINGER) return
             val x = model.viewport.worldX(event.x); val y = model.viewport.worldY(event.y)
-            val moveSelection = model.beginCanvasContact(x, y)
+            imageResizing = resizeHandle()?.let { hypot(event.x - it.x, event.y - it.y) <= resizeHandleRadius * 2 } == true
+            val moveSelection = imageResizing || model.beginCanvasContact(x, y)
             if (!moveSelection && model.penButton.lassoHeld) return
             fingerDevice = event.deviceId; fingerStart = model.viewport.position
             if (moveSelection) {
@@ -626,7 +660,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             }
             longPressPoint = WorldPoint(event.x, event.y)
             longPressWorldY = y
-            postDelayed(fingerLongPress, ViewConfiguration.getLongPressTimeout().toLong())
+            longPressPointerId = event.getPointerId(event.actionIndex)
+            if (!moveSelection) postDelayed(fingerLongPress, ViewConfiguration.getLongPressTimeout().toLong())
         }
         if (fingerDevice != event.deviceId) return
         if (event.pointerCount != 1 || event.actionMasked == MotionEvent.ACTION_CANCEL ||
@@ -645,6 +680,14 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 // A second finger outside the moving selection begins the normal pan/pinch gesture.
                 finishFingerGesture(canceled = true)
                 fingerDevice = event.deviceId; fingerStart = model.viewport.position
+            } else if (model.preferences.value.value.pinchResizeMedia && model.resizableImage != null && event.pointerCount == 2) {
+                imagePinching = true
+                imageResizing = false
+                imagePinchSpan = hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
+                imagePinchScale = model.selectionScale
+                val image = checkNotNull(model.resizableImage)
+                imagePinchCenter = WorldPoint(image.left + image.width * imagePinchScale / 2f + model.selectionOffset.x,
+                    image.top + image.height * imagePinchScale / 2f + model.selectionOffset.y)
             }
         }
         fingerSelectionId?.let { id ->
@@ -654,6 +697,13 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                     (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_POINTER_UP) &&
                     event.flags and MotionEvent.FLAG_CANCELED != 0)
             if (canceled || i < 0) finishFingerGesture(canceled = true)
+            else if (imagePinching) {
+                if (event.pointerCount >= 2 && imagePinchSpan > 0f) {
+                    val span = hypot(event.getX(0) - event.getX(1), event.getY(0) - event.getY(1))
+                    model.previewImagePinch(imagePinchScale * span / imagePinchSpan, imagePinchCenter)
+                }
+                if (event.actionMasked == MotionEvent.ACTION_POINTER_UP || event.actionMasked == MotionEvent.ACTION_UP) finishFingerGesture()
+            }
             else when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> selectionSamples(event, i)
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> if (event.getPointerId(event.actionIndex) == id) {
@@ -689,7 +739,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         val initial = fingerStart ?: return
         fingerDevice = null; fingerStart = null
         if (fingerSelectionId != null) {
-            fingerSelectionId = null; selectionMoving = false
+            fingerSelectionId = null; selectionMoving = false; imageResizing = false; imagePinching = false
             if (canceled) model.cancelSelectionMove() else model.commitSelectionMove()
             completed.invalidate(); invalidate()
             return

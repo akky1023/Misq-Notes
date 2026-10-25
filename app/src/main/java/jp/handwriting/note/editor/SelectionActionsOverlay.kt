@@ -41,7 +41,7 @@ internal fun SelectionActionsOverlay(selection: SelectionOverlay?, onDelete: () 
             CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 36.dp) {
                 Row(Modifier.padding(4.dp)) {
                     ToolAction(AppMessages.text(R.string.duplicate_selection), ToolbarIcons.Copy, selection.enabled, onClick = onCopy)
-                    ToolAction(AppMessages.text(R.string.capture_selection), ToolbarIcons.Capture, selection.enabled, onClick = onCapture)
+                    if (selection.canCapture) ToolAction(AppMessages.text(R.string.capture_selection), ToolbarIcons.Capture, selection.enabled, onClick = onCapture)
                     ToolAction(AppMessages.text(R.string.delete_selection), ToolbarIcons.Delete, selection.enabled, onClick = onDelete)
                     ToolAction(AppMessages.text(R.string.clear_selection), ToolbarIcons.Close, selection.enabled, onClick = onClear)
                 }

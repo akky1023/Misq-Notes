@@ -11,7 +11,7 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     private data class RecordedNode(val node: RenderNode, val position: ViewPosition) {
         fun discard() = node.discardDisplayList()
     }
-    private data class Group(val nodes: List<RecordedNode>, val items: List<Item>, val offset: WorldPoint, val tail: List<Item> = emptyList())
+    private data class Group(val nodes: List<RecordedNode>, val items: List<Item>, val offset: WorldPoint, val tail: List<Item> = emptyList(), val scale: Float = 1f)
     private val groups = mutableMapOf<Long, Group>()
     private var viewport: ViewPosition? = null
     private var width = 0
@@ -27,7 +27,8 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
 
     fun draw(canvas: Canvas, entries: List<Pair<Long, EditorStroke>>, position: ViewPosition,
         viewWidth: Int, viewHeight: Int, selectionOffset: WorldPoint,
-        selected: (EditorStroke) -> Boolean, compact: Boolean = false, retainedStrokes: Set<EditorStroke>? = null, drawStroke: (Canvas, EditorStroke, Boolean) -> Unit) {
+        selected: (EditorStroke) -> Boolean, compact: Boolean = false, retainedStrokes: Set<EditorStroke>? = null,
+        selectionScale: Float = 1f, drawStroke: (Canvas, EditorStroke, Boolean) -> Unit) {
         // Bitmap exports and previews continue to use Ink's software renderer.
         if (!canvas.isHardwareAccelerated) {
             entries.forEach { drawStroke(canvas, it.second, selected(it.second)) }
@@ -56,9 +57,10 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
         for ((id, strokes) in visible) {
             val items = strokes.map { Item(it.second, selected(it.second)) }
             val offset = if (items.any { it.selected }) selectionOffset else WorldPoint(0f, 0f)
+            val factor = if (items.any { it.selected }) selectionScale else 1f
             var group = groups[id]
-            if (group == null || group.items != items || group.offset != offset) {
-                if (group != null && appendLimit < GROUP_SIZE && group.offset == offset && items.size > group.items.size &&
+            if (group == null || group.items != items || group.offset != offset || group.scale != factor) {
+                if (group != null && appendLimit < GROUP_SIZE && group.offset == offset && group.scale == factor && items.size > group.items.size &&
                     group.items.indices.all { group.items[it] == items[it] }) {
                     // Retain the large base display list; re-record only the appended tail.
                     val tail = group.tail + items.drop(group.items.size)
@@ -66,16 +68,16 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
                     val reusable = if (group.tail.isNotEmpty()) nodes.removeAt(nodes.lastIndex) else null
                     val chunks = tail.chunked(appendLimit)
                     chunks.forEachIndexed { index, chunk -> nodes += record(id, chunk, if (index == 0) reusable else null) }
-                    group = Group(nodes, items, offset, chunks.last().takeIf { it.size < appendLimit }.orEmpty())
+                    group = Group(nodes, items, offset, chunks.last().takeIf { it.size < appendLimit }.orEmpty(), factor)
                 } else {
                     group?.nodes?.forEach(RecordedNode::discard)
-                    group = Group(listOf(record(id, items)), items, offset)
+                    group = Group(listOf(record(id, items)), items, offset, scale = factor)
                 }
                 groups[id] = group
             }
             if (compact && !compacted && group.nodes.size > 1) {
                 group.nodes.forEach(RecordedNode::discard)
-                group = Group(listOf(record(id, items)), items, offset)
+                group = Group(listOf(record(id, items)), items, offset, scale = factor)
                 groups[id] = group; compacted = true
             }
             val scale = viewWidth / Viewport.WIDTH * position.zoom

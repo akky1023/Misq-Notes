@@ -16,6 +16,9 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlin.math.max
@@ -64,7 +67,7 @@ data class WorkspaceUi(
 internal data class PaletteUi(val colors: List<Int> = SavedColors.defaults, val saving: Boolean = false, val error: String? = null)
 internal data class ToolPreferencesUi(val value: ToolPreferences = ToolPreferences(), val saving: Boolean = false, val error: String? = null)
 internal data class LibraryUi(val value: LibraryPreferences = LibraryPreferences(), val saving: Boolean = false, val error: String? = null)
-internal data class SelectionOverlay(val left: Float, val top: Float, val right: Float, val bottom: Float, val enabled: Boolean)
+internal data class SelectionOverlay(val left: Float, val top: Float, val right: Float, val bottom: Float, val enabled: Boolean, val canCapture: Boolean = true)
 internal data class StorageLocationUi(val label: String = AppMessages.text(R.string.storage_default), val custom: Boolean = false)
 
 class EditorViewModel : ViewModel() {
@@ -107,6 +110,9 @@ class EditorViewModel : ViewModel() {
         private set
     internal var selectionBounds: StrokeIndex.Bounds? = null
         private set
+    internal var selectionScale = 1f
+        private set
+    internal val resizableImage get() = selection.values.singleOrNull()?.image
     val viewport = Viewport()
     private val index = StrokeIndex<EditorStroke>()
     internal var canvasRevision = 0L
@@ -401,11 +407,13 @@ class EditorViewModel : ViewModel() {
         return queue.request(PendingSave(updated, edits.nextEntryId, entries)).also { lastGeneration = it }
     }
 
-    internal suspend fun importDocument(context: android.content.Context, uri: android.net.Uri, noteId: String) {
+    internal suspend fun importDocument(context: android.content.Context, uri: android.net.Uri, noteId: String,
+        selectPages: suspend (Int) -> List<Int> = { (0 until it).toList() }, onCommit: () -> Unit = {}) {
         check(!mutableUi.value.busy && !mutableWorkspace.value.working)
         val note = checkNotNull(mutableWorkspace.value.current)
         check(note.id == noteId)
-        val images = withContext(Dispatchers.IO) { EmbeddedImages.read(context.applicationContext, uri) }
+        val images = withContext(Dispatchers.IO) { EmbeddedImages.read(context.applicationContext, uri, selectPages) }
+        currentCoroutineContext().ensureActive()
         check(mutableWorkspace.value.current?.id == note.id && !edits.busy && !selectionWorking)
         clearSelection()
         val top = maxOf(viewport.position.top, if (edits.snapshot().isEmpty()) 0f else contentBottom + 24f)
@@ -414,11 +422,14 @@ class EditorViewModel : ViewModel() {
             val height = Viewport.WIDTH * data.height / data.width
             EditorStroke(ImageRecord(data, 0f, y, Viewport.WIDTH, height)).also { y += height + 24f }
         }
+        onCommit()
         edits.addAll(content)
         viewport.restore(ViewPosition(top = top))
         updateViewportOverlay(); onCanvasChange?.invoke()
         val generation = enqueueSave(force = true)
-        check(generation != null && checkNotNull(saves).await(generation)) { AppMessages.text(R.string.import_save_failed) }
+        withContext(NonCancellable) {
+            check(generation != null && checkNotNull(saves).await(generation)) { AppMessages.text(R.string.import_save_failed) }
+        }
     }
 
     fun chooseTool(tool: EditorTool) {
@@ -527,6 +538,10 @@ class EditorViewModel : ViewModel() {
     internal fun chooseLassoMode(mode: LassoMode) {
         if (!mutableUi.value.busy) updatePreferences(mutablePreferences.value.value.copy(lassoMode = mode))
     }
+    internal fun pinchResizeMedia(enabled: Boolean) = updatePreferences(mutablePreferences.value.value.copy(pinchResizeMedia = enabled))
+    internal fun lassoIncludeMedia(enabled: Boolean) {
+        if (!mutableUi.value.busy) updatePreferences(mutablePreferences.value.value.copy(lassoIncludeMedia = enabled))
+    }
     internal fun isSelected(stroke: EditorStroke) = stroke.storageId in selectedStorageIds
     private fun refreshSelection() {
         canvasRevision++
@@ -536,7 +551,7 @@ class EditorViewModel : ViewModel() {
             bounds.minOf { it.xMin }, bounds.minOf { it.yMin }, bounds.maxOf { it.xMax }, bounds.maxOf { it.yMax })
     }
     internal fun clearSelection() {
-        selection.clear(); selectionOffset = WorldPoint(0f, 0f); refreshSelection()
+        selection.clear(); selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f; refreshSelection()
         mutableUi.value = mutableUi.value.copy(selectionCount = 0)
         updateSelectionOverlay()
         onCanvasChange?.invoke()
@@ -552,17 +567,49 @@ class EditorViewModel : ViewModel() {
         return false
     }
     internal fun beginSelectionGesture() { selectionGesture = true; publish() }
+    internal fun selectImportedImage(x: Float, y: Float): Boolean {
+        if (mutableUi.value.busy || selectionWorking || insertingSpace) return false
+        val hit = index.query(StrokeIndex.Bounds(x, y, x, y)).lastOrNull { (_, stroke) ->
+            stroke.image?.let { x in it.left..(it.left + it.width) && y in it.top..(it.top + it.height) } == true
+        } ?: return false
+        clearSelection()
+        selection[hit.first] = hit.second
+        refreshSelection(); publish()
+        return true
+    }
+    internal fun previewImageResize(factor: Float) {
+        val image = resizableImage ?: return
+        if (!factor.isFinite() || selectionWorking) return
+        val maximum = ((Viewport.WIDTH - image.left - selectionOffset.x) / image.width).coerceAtLeast(0.01f)
+        val minimum = minOf(maximum, 24f / minOf(image.width, image.height))
+        selectionScale = factor.coerceIn(minimum, maximum)
+        updateSelectionOverlay(); onCanvasChange?.invoke()
+    }
+    internal fun previewImagePinch(factor: Float, center: WorldPoint) {
+        val image = resizableImage ?: return
+        if (!factor.isFinite() || !center.x.isFinite() || !center.y.isFinite() || selectionWorking) return
+        // Clamp the size at the page edges without shifting the gesture's fixed image center.
+        val maximum = minOf(2f * center.x / image.width, 2f * (Viewport.WIDTH - center.x) / image.width,
+            2f * center.y / image.height).coerceAtLeast(0.01f)
+        val minimum = minOf(maximum, 24f / minOf(image.width, image.height))
+        selectionScale = factor.coerceIn(minimum, maximum)
+        val resized = image.resizedFromCenter(selectionScale, center.x, center.y)
+        selectionOffset = WorldPoint(resized.left - image.left, resized.top - image.top)
+        updateSelectionOverlay(); onCanvasChange?.invoke()
+    }
     internal fun selectLasso(points: List<WorldPoint>) {
         if (edits.busy || selectionWorking) return
         selectionGesture = false
         val polygon = LassoGeometry(points)
         if (!polygon.valid) { clearSelection(); publish(); return }
         val candidates = index.query(StrokeIndex.Bounds(points.minOf { it.x }, points.minOf { it.y }, points.maxOf { it.x }, points.maxOf { it.y }))
+        val includeMedia = mutablePreferences.value.value.lassoIncludeMedia
         selectionWorking = true; publish()
         viewModelScope.launch {
             try {
                 val selected = withContext(Dispatchers.Default) { candidates.filter { (_, stroke) ->
                     stroke.image?.let { image ->
+                        if (!includeMedia) return@filter false
                         val corners = listOf(WorldPoint(image.left, image.top), WorldPoint(image.left + image.width, image.top),
                             WorldPoint(image.left + image.width, image.top + image.height), WorldPoint(image.left, image.top + image.height))
                         return@filter corners.all(polygon::contains)
@@ -589,7 +636,7 @@ class EditorViewModel : ViewModel() {
         updateSelectionOverlay()
         onCanvasChange?.invoke()
     }
-    internal fun cancelSelectionMove() { selectionOffset = WorldPoint(0f, 0f); selectionGesture = false; publish() }
+    internal fun cancelSelectionMove() { selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f; selectionGesture = false; publish() }
     internal fun beginSpaceInsertion(y: Float): Boolean {
         if (mutableUi.value.busy || !y.isFinite()) return false
         clearSelection()
@@ -610,9 +657,10 @@ class EditorViewModel : ViewModel() {
     }
     internal fun commitSelectionMove(clearAfter: Boolean = false, onFinished: (() -> Unit)? = null) {
         val delta = selectionOffset
+        val factor = selectionScale
         if (edits.busy || selectionWorking) return
         selectionGesture = false
-        if (selection.isEmpty() || delta == WorldPoint(0f, 0f)) {
+        if (selection.isEmpty() || (delta == WorldPoint(0f, 0f) && factor == 1f)) {
             if (clearAfter) cancelSpaceInsertion() else cancelSelectionMove()
             onFinished?.invoke()
             return
@@ -621,12 +669,15 @@ class EditorViewModel : ViewModel() {
         selectionWorking = true; publish()
         viewModelScope.launch {
             try {
-                val moved = withContext(Dispatchers.Default) { before.mapValues { (_, stroke) -> stroke.translated(delta.x, delta.y) } }
-                selectionOffset = WorldPoint(0f, 0f)
+                val moved = withContext(Dispatchers.Default) { before.mapValues { (_, stroke) ->
+                    if (factor != 1f && stroke.image != null) EditorStroke(stroke.image.resized(factor).translated(delta.x, delta.y))
+                    else stroke.translated(delta.x, delta.y)
+                } }
+                selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f
                 edits.replace(moved)
             } catch (e: Exception) { fail(e) }
             finally {
-                selectionOffset = WorldPoint(0f, 0f); selectionWorking = false
+                selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f; selectionWorking = false
                 if (clearAfter) { insertingSpace = false; clearSelection() }
                 publish()
                 onFinished?.invoke()
@@ -667,10 +718,10 @@ class EditorViewModel : ViewModel() {
         if (bounds == null || insertingSpace) { mutableSelectionOverlay.value = null; return }
         val left = viewport.screenX(bounds.left + selectionOffset.x)
         val top = viewport.screenY(bounds.top + selectionOffset.y)
-        val right = viewport.screenX(bounds.right + selectionOffset.x)
-        val bottom = viewport.screenY(bounds.bottom + selectionOffset.y)
+        val right = viewport.screenX(bounds.left + (bounds.right - bounds.left) * selectionScale + selectionOffset.x)
+        val bottom = viewport.screenY(bounds.top + (bounds.bottom - bounds.top) * selectionScale + selectionOffset.y)
         mutableSelectionOverlay.value = if (right < 0 || bottom < 0 || left > viewport.width || top > viewport.height) null
-            else SelectionOverlay(left, top, right, bottom, !mutableUi.value.busy)
+            else SelectionOverlay(left, top, right, bottom, !mutableUi.value.busy, selection.values.none { it.image != null })
     }
     internal fun updateViewportOverlay() {
         mutableZoomPercent.value = viewport.zoomPercent

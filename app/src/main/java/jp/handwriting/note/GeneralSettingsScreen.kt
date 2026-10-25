@@ -100,6 +100,13 @@ internal fun GeneralSettingsScreen(model: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     "notes" -> {
+                        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                            .toggleable(preferences.value.pinchResizeMedia, role = Role.Switch, onValueChange = model::pinchResizeMedia)
+                            .padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(AppMessages.text(R.string.pinch_resize_media), Modifier.weight(1f))
+                            Switch(preferences.value.pinchResizeMedia, onCheckedChange = null)
+                        }
+                        HorizontalDivider()
                         StrokeCacheSettings(library.value.strokeCache, model::strokeCache)
                         HorizontalDivider()
                         StorageSettings(model)

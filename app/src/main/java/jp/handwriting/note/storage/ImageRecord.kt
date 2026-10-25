@@ -23,6 +23,14 @@ data class ImageRecord(val data: ImageData, val left: Float, val top: Float, val
         require(width > 0 && height > 0 && (left + width).isFinite() && (top + height).isFinite())
     }
     fun translated(dx: Float, dy: Float) = copy(left = left + dx, top = top + dy)
+    fun resized(factor: Float): ImageRecord {
+        require(factor.isFinite() && factor > 0f)
+        return copy(width = width * factor, height = height * factor)
+    }
+    fun resizedFromCenter(factor: Float, centerX: Float = left + width / 2f, centerY: Float = top + height / 2f): ImageRecord {
+        val scaled = resized(factor)
+        return scaled.copy(left = centerX - scaled.width / 2f, top = centerY - scaled.height / 2f)
+    }
     fun encode(): ByteArray = ByteArrayOutputStream().also { buffer -> DataOutputStream(buffer).use { out ->
         out.writeInt(MAGIC); out.writeInt(1)
         out.writeFloat(left); out.writeFloat(top); out.writeFloat(width); out.writeFloat(height)

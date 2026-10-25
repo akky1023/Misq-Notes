@@ -25,12 +25,36 @@ class ToolPreferencesTest {
         ToolPreferencesFile(file).write(value)
         assertEquals(value, ToolPreferencesFile(file).read())
         val current = NoteFiles.readEnvelope(file)
-        // Version 9 has the same payload except for the appended lasso mode.
-        val previous = current.copyOf(current.size - 4)
+        // Version 9 omits the lasso mode and the two media preferences.
+        val previous = current.copyOf(current.size - 6)
         previous[3] = 9
         NoteFiles.atomicWrite(file, previous)
         val loaded = ToolPreferencesFile(file).read()
         assertEquals(value.copy(lassoMode = LassoMode.FREE), loaded)
+    }
+    @Test fun mediaPreferencesSurviveRestartAndVersionTenUsesSafeDefaults() {
+        val file = File(temp.newFolder(), "tools.hwp")
+        assertTrue(ToolPreferencesFile(file).read().pinchResizeMedia)
+        assertFalse(ToolPreferencesFile(file).read().lassoIncludeMedia)
+        val value = ToolPreferences(lassoMode = LassoMode.RECTANGLE, pinchResizeMedia = false, lassoIncludeMedia = true)
+        ToolPreferencesFile(file).write(value)
+        assertEquals(value, ToolPreferencesFile(file).read())
+        val current = NoteFiles.readEnvelope(file)
+        val previous = current.copyOf(current.size - 2)
+        previous[3] = 10
+        NoteFiles.atomicWrite(file, previous)
+        assertEquals(value.copy(pinchResizeMedia = true, lassoIncludeMedia = false), ToolPreferencesFile(file).read())
+    }
+    @Test fun lassoMediaToggleRemembersBothStatesAcrossRestartsAndOtherPreferenceChanges() {
+        val file = File(temp.newFolder(), "tools.hwp")
+        for (enabled in listOf(true, false, true)) {
+            val current = ToolPreferencesFile(file).read()
+            ToolPreferencesFile(file).write(current.copy(lassoIncludeMedia = enabled))
+            val restored = ToolPreferencesFile(file).read()
+            assertEquals(enabled, restored.lassoIncludeMedia)
+            ToolPreferencesFile(file).write(restored.copy(pinchResizeMedia = !restored.pinchResizeMedia))
+            assertEquals(enabled, ToolPreferencesFile(file).read().lassoIncludeMedia)
+        }
     }
     @Test fun allThreeButtonActionsSurviveRestart() {
         val file = File(temp.newFolder(), "tools.hwp")

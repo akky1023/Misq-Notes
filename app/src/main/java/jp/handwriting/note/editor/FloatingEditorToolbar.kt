@@ -50,7 +50,7 @@ internal fun FloatingEditorToolbar(
     onSaveColor: (Int) -> Unit, onRemoveColor: (Int) -> Unit, onRetryPalette: () -> Unit,
     onSaveWidth: (Int, Int) -> Unit, onRetryPreferences: () -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onToolOrder: (List<EditorTool>) -> Unit, onDockChange: (ToolbarDock) -> Unit,
-    onLassoMode: (LassoMode) -> Unit,
+    onLassoMode: (LassoMode) -> Unit, onImport: () -> Unit, onLassoIncludeMedia: (Boolean) -> Unit,
 ) {
     var horizontal by rememberSaveable { mutableFloatStateOf(0.5f) }
     var vertical by rememberSaveable { mutableFloatStateOf(0f) }
@@ -154,6 +154,7 @@ internal fun FloatingEditorToolbar(
                 }
             }
         }
+        ToolAction(AppMessages.text(R.string.import_document), ToolbarIcons.Image, !ui.busy, onClick = onImport)
     }
     @Composable fun CollapseButton() {
         val rotation = when (edge) {
@@ -188,6 +189,12 @@ internal fun FloatingEditorToolbar(
                 if (mode == LassoMode.FREE) ToolbarIcons.FreeLasso else ToolbarIcons.RectangleLasso,
                 !ui.busy, active) { onLassoMode(mode) }
         }
+        if (verticalLayout) HorizontalDivider(Modifier.width(28.dp).padding(vertical = 3.dp))
+        else VerticalDivider(Modifier.height(22.dp).padding(horizontal = 4.dp))
+        ToolAction(AppMessages.text(R.string.lasso_include_media), ToolbarIcons.Image, !ui.busy,
+            preferences.value.lassoIncludeMedia, activeTint = Color(0xFF2196F3)) {
+            onLassoIncludeMedia(!preferences.value.lassoIncludeMedia)
+        }
     }
     Box(Modifier.fillMaxSize().onSizeChanged { area = it }.onGloballyPositioned { toolbarRoot = it.positionInRoot() }) {
         Surface(modifier = Modifier
@@ -196,7 +203,7 @@ internal fun FloatingEditorToolbar(
             .onSizeChanged { window = it }
             .shadow(8.dp, if (minimized) CircleShape else RoundedCornerShape(12.dp), clip = false)
             .animateContentSize(animationSpec = spring(dampingRatio = 1f, stiffness = 450f))
-            .then(if (minimized) Modifier.size(96.dp) else if (verticalLayout) Modifier.widthIn(max = 84.dp).heightIn(max = 400.dp) else Modifier.widthIn(max = 304.dp).fillMaxWidth())
+            .then(if (minimized) Modifier.size(96.dp) else if (verticalLayout) Modifier.widthIn(max = 84.dp).heightIn(max = 400.dp) else Modifier.widthIn(max = 340.dp).fillMaxWidth())
             .clip(if (minimized) CircleShape else RoundedCornerShape(12.dp))
             .semantics { contentDescription = AppMessages.text(R.string.toolbar_description) }
             .systemGestureExclusion()
@@ -282,15 +289,16 @@ internal fun FloatingEditorToolbar(
 }
 
 @Composable
-internal fun ToolAction(label: String, icon: ImageVector, enabled: Boolean = true, active: Boolean = false, onClick: () -> Unit) {
+internal fun ToolAction(label: String, icon: ImageVector, enabled: Boolean = true, active: Boolean = false,
+    activeTint: Color? = null, onClick: () -> Unit) {
     Surface(
         onClick = onClick, enabled = enabled,
         modifier = Modifier.size(36.dp).semantics { selected = active; contentDescription = label },
         shape = CircleShape,
-        color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+        color = if (active) activeTint?.copy(alpha = 0.15f) ?: MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
         contentColor = when {
             !enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-            active -> MaterialTheme.colorScheme.onPrimaryContainer
+            active -> activeTint ?: MaterialTheme.colorScheme.onPrimaryContainer
             else -> MaterialTheme.colorScheme.onSurfaceVariant
         },
     ) { Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(22.dp)) } }

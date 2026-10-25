@@ -103,9 +103,9 @@
     <string name="retry_settings" formatted="false">"設定の保存を再試行"</string>
     <string name="width_slot">"太さの保存枠%1$s：%2$s"</string>
     <string name="edit_width_preset" formatted="false">"太さのテンプレートを編集"</string>
-    <string name="duplicate_selection" formatted="false">"選択した筆跡を複製"</string>
+    <string name="duplicate_selection" formatted="false">"選択した要素を複製"</string>
     <string name="capture_selection" formatted="false">"選択範囲をキャプチャー"</string>
-    <string name="delete_selection" formatted="false">"選択した筆跡を削除"</string>
+    <string name="delete_selection" formatted="false">"選択した要素を削除"</string>
     <string name="clear_selection" formatted="false">"選択を解除"</string>
     <string name="share" formatted="false">"共有する"</string>
     <string name="copied_to_clipboard" formatted="false">"クリップボードにコピーしました"</string>
@@ -219,9 +219,15 @@
     <string name="margin_color">縦罫線の色</string>
     <string name="margin_width">縦罫線の太さ：%1$s</string>
     <string name="margin_offset">左端からの距離：%1$s</string>
-    <string name="import_photo">写真を取り込む</string>
-    <string name="import_pdf">PDFを取り込む</string>
+    <string name="import_document">画像/PDFを取り込む</string>
     <string name="import_complete">ノートに取り込みました。元ファイルを削除しても表示できます。</string>
     <string name="import_failed">取り込めませんでした：%1$s</string>
     <string name="import_save_failed">取り込んだ内容を保存できませんでした。保存を再試行してください。</string>
+    <string name="import_select_pages">取り込むPDFページを選択</string>
+    <string name="import_page">%1$sページ</string>
+    <string name="import_select_all">すべて選択</string>
+    <string name="import_clear_pages">すべて解除</string>
+    <string name="import_cancel">キャンセル</string>
+    <string name="pinch_resize_media">選択したメディアをピンチで拡大縮小</string>
+    <string name="lasso_include_media">lassoの選択にメディアを含める</string>
 </resources>

@@ -3,7 +3,6 @@ package jp.handwriting.note.editor
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
 
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -25,14 +24,12 @@ import java.util.UUID
 
 @Composable
 internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String, onDismiss: () -> Unit, onBackground: (() -> Unit)? = null) {
-    val workspace by model.workspace.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var pending by rememberSaveable { mutableStateOf<String?>(null) }
     var success by remember { mutableStateOf(false) }
-    var importSuccess by remember { mutableStateOf(false) }
     val complete: (android.net.Uri?) -> Unit = { uri ->
         val source = pending?.let(::File)
         if (uri == null) { source?.delete(); pending = null; busy = false }
@@ -49,20 +46,11 @@ internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String
             finally { source?.delete(); pending = null; busy = false }
         }
     }
-    val importFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            busy = true; error = null; success = false; importSuccess = false
-            try { model.importDocument(context, uri, id); importSuccess = true }
-            catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { error = AppMessages.text(R.string.import_failed, e.localizedMessage ?: "") }
-            finally { busy = false }
-        }
-    }
     val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf"), complete)
     val png = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png"), complete)
     fun export(format: NoteExportFormat) {
         scope.launch {
-            busy = true; error = null; success = false; importSuccess = false
+            busy = true; error = null; success = false
             try {
                 val snapshot = model.exportSnapshot(id)
                 val file = withContext(Dispatchers.IO) {
@@ -88,18 +76,6 @@ internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String
                     Icon(ToolbarIcons.ChevronRight, AppMessages.text(R.string.open_note_background))
                 }
             }
-            if (workspace.current?.id == id) {
-                TextButton(enabled = !busy, onClick = { importFile.launch(arrayOf("image/*")) }) {
-                    Icon(ToolbarIcons.Image, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(AppMessages.text(R.string.import_photo))
-                }
-                TextButton(enabled = !busy, onClick = { importFile.launch(arrayOf("application/pdf")) }) {
-                    Icon(ToolbarIcons.Pdf, null)
-                    Spacer(Modifier.width(8.dp))
-                    Text(AppMessages.text(R.string.import_pdf))
-                }
-            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 IconButton(enabled = !busy, onClick = { export(NoteExportFormat.PDF) }, modifier = Modifier.size(56.dp)) {
                     Icon(ToolbarIcons.Pdf, AppMessages.text(R.string.export_pdf), Modifier.size(32.dp), tint = MaterialTheme.colorScheme.error)
@@ -109,7 +85,6 @@ internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String
                 }
             }
             if (busy) CircularProgressIndicator(Modifier.size(24.dp))
-            if (importSuccess) Text(AppMessages.text(R.string.import_complete))
             if (success) Text(AppMessages.text(R.string.export_complete))
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }

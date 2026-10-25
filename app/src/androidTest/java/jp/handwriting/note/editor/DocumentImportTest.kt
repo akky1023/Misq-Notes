@@ -12,12 +12,47 @@ import jp.handwriting.note.storage.*
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.UUID
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class DocumentImportTest {
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
+
+    @Test fun pdfImportsOnlySelectedPagesInDocumentOrderAndCancellationCleansUp() = runBlocking {
+        val file = File(context.cacheDir, "page-selection-${UUID.randomUUID()}.pdf")
+        try {
+            val pdf = PdfDocument()
+            try {
+                listOf(Color.RED, Color.GREEN, Color.BLUE).forEachIndexed { index, color ->
+                    val page = pdf.startPage(PdfDocument.PageInfo.Builder(100, 100, index + 1).create())
+                    page.canvas.drawColor(color); pdf.finishPage(page)
+                }
+                file.outputStream().use(pdf::writeTo)
+            } finally { pdf.close() }
+            val images = EmbeddedImages.read(context, Uri.fromFile(file)) { count ->
+                assertEquals(3, count)
+                listOf(2, 0, 2)
+            }
+            assertEquals(2, images.size)
+            images.forEachIndexed { index, image ->
+                val bitmap = BitmapFactory.decodeByteArray(image.png, 0, image.png.size)
+                try { assertEquals(if (index == 0) Color.RED else Color.BLUE, bitmap.getPixel(50, 50)) }
+                finally { bitmap.recycle() }
+            }
+            val selecting = CompletableDeferred<Unit>()
+            val import = launch(Dispatchers.IO) {
+                EmbeddedImages.read(context, Uri.fromFile(file)) {
+                    selecting.complete(Unit)
+                    awaitCancellation()
+                }
+                fail("Canceled import returned images")
+            }
+            withTimeout(5000) { selecting.await() }
+            import.cancelAndJoin()
+            assertFalse(context.cacheDir.listFiles().orEmpty().any { it.name.startsWith("note-import-") })
+        } finally { file.delete() }
+    }
 
     @Test fun photoRendersAndExportsAfterDeletingTheSourceAndReopeningTheRepository() = runBlocking {
         val root = File(context.cacheDir, "photo-import-${UUID.randomUUID()}").apply { mkdirs() }

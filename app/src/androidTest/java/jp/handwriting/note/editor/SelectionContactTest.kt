@@ -29,6 +29,123 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class SelectionContactTest {
+    private fun importedImage() = EditorStroke(jp.handwriting.note.storage.ImageRecord(
+        jp.handwriting.note.storage.ImageData(java.util.Base64.getDecoder().decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAICAYAAADN5B7xAAAAEUlEQVR4nGNgGBrgPxgNXwAAvNoB/z2zBvkAAAAASUVORK5CYII=")),
+        200f, 200f, 400f, 300f))
+
+    @Test fun lassoCanExcludeMediaWhileLongPressSelectionStillHidesCapture() = runBlocking {
+        withCanvas { model, _ ->
+            val enclosure = listOf(WorldPoint(50f, 50f), WorldPoint(700f, 50f), WorldPoint(700f, 600f), WorldPoint(50f, 600f))
+            withContext(Dispatchers.Main) {
+                model.clearSelection()
+                model.edits.addAll(listOf(importedImage()))
+                model.lassoIncludeMedia(false)
+                model.selectLasso(enclosure)
+            }
+            withTimeout(15000) { model.ui.first { !it.busy } }
+            withContext(Dispatchers.Main) {
+                assertEquals(1, model.ui.value.selectionCount)
+                assertTrue(model.selectionOverlay.value!!.canCapture)
+                model.lassoIncludeMedia(true)
+                model.selectLasso(enclosure)
+            }
+            withTimeout(15000) { model.ui.first { !it.busy } }
+            withContext(Dispatchers.Main) {
+                assertEquals(2, model.ui.value.selectionCount)
+                assertFalse(model.selectionOverlay.value!!.canCapture)
+                model.clearSelection()
+                model.lassoIncludeMedia(false)
+                assertTrue(model.selectImportedImage(300f, 300f))
+                assertFalse(model.selectionOverlay.value!!.canCapture)
+            }
+        }
+    }
+
+    @Test fun mediaPinchDefaultsOnAndResizesAroundImageCenterOnlyWhenEnabled() = runBlocking {
+        withCanvas { model, view ->
+            withContext(Dispatchers.Main) {
+                model.clearSelection()
+                model.edits.addAll(listOf(importedImage()))
+                assertTrue(model.selectImportedImage(300f, 300f))
+                assertTrue(model.preferences.value.value.pinchResizeMedia)
+                model.pinchResizeMedia(false)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 300f, 300f)
+                sendPair(view, MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 300f, 500f)
+                sendPair(view, MotionEvent.ACTION_MOVE, 350f, 450f)
+                assertEquals(1f, model.selectionScale, 0f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_CANCEL, 350f, 300f)
+                model.pinchResizeMedia(true)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 300f, 300f)
+                sendPair(view, MotionEvent.ACTION_POINTER_DOWN or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 300f, 500f)
+                sendPair(view, MotionEvent.ACTION_MOVE, 350f, 450f)
+                assertEquals(0.5f, model.selectionScale, 0.01f)
+                assertEquals(WorldPoint(100f, 75f), model.selectionOffset)
+                sendPair(view, MotionEvent.ACTION_POINTER_UP or (1 shl MotionEvent.ACTION_POINTER_INDEX_SHIFT), 350f, 450f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 350f, 300f)
+            }
+            withTimeout(15000) { model.ui.first { !it.busy } }
+            withContext(Dispatchers.Main) {
+                val image = model.resizableImage!!
+                assertEquals(200f, image.width, 0.01f)
+                assertEquals(400f, image.left + image.width / 2f, 0.01f)
+                assertEquals(350f, image.top + image.height / 2f, 0.01f)
+            }
+        }
+    }
+
+    private fun sendPair(view: InkCanvasView, action: Int, firstX: Float, secondX: Float) {
+        eventTime += 20
+        val event = MotionEvent.obtain(downTime, eventTime, action, 2,
+            Array(2) { index -> MotionEvent.PointerProperties().apply { id = index; toolType = MotionEvent.TOOL_TYPE_FINGER } },
+            Array(2) { index -> MotionEvent.PointerCoords().apply { x = if (index == 0) firstX else secondX; y = 300f; pressure = 0.5f } },
+            0, 0, 1f, 1f, 14, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        try { view.onTouchEvent(event) } finally { event.recycle() }
+    }
+
+    @Test fun importedImageLongPressMovesResizesCancelsAndSupportsUndo() = runBlocking {
+        withCanvas { model, view ->
+            val png = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAwAAAAICAYAAADN5B7xAAAAEUlEQVR4nGNgGBrgPxgNXwAAvNoB/z2zBvkAAAAASUVORK5CYII=")
+            withContext(Dispatchers.Main) {
+                model.clearSelection()
+                model.edits.addAll(listOf(EditorStroke(jp.handwriting.note.storage.ImageRecord(
+                    jp.handwriting.note.storage.ImageData(png), 200f, 200f, 400f, 300f))))
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 300f, 300f)
+            }
+            delay(ViewConfiguration.getLongPressTimeout().toLong() + 200)
+            withContext(Dispatchers.Main) {
+                assertNotNull(model.resizableImage)
+                assertNotNull(model.selectionOverlay.value)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_MOVE, 350f, 340f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 350f, 340f)
+            }
+            withTimeout(15000) { model.ui.first { !it.busy } }
+            withContext(Dispatchers.Main) {
+                assertEquals(250f, model.resizableImage!!.left, 0.01f)
+                assertEquals(240f, model.resizableImage!!.top, 0.01f)
+                // Drag the bottom-right handle to half size, preserving the aspect ratio.
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 650f, 540f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_MOVE, 450f, 390f)
+                assertEquals(0.5f, model.selectionScale, 0.01f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_UP, 450f, 390f)
+            }
+            withTimeout(15000) { model.ui.first { !it.busy } }
+            withContext(Dispatchers.Main) {
+                assertEquals(200f, model.resizableImage!!.width, 0.01f)
+                assertEquals(150f, model.resizableImage!!.height, 0.01f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_DOWN, 450f, 390f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_MOVE, 550f, 465f)
+                send(view, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.ACTION_CANCEL, 550f, 465f)
+                assertEquals(1f, model.selectionScale, 0f)
+                assertEquals(200f, model.resizableImage!!.width, 0.01f)
+                model.edits.undo()
+                assertEquals(400f, model.resizableImage!!.width, 0.01f)
+                model.clearSelection()
+                assertNull(model.selectionOverlay.value)
+            }
+        }
+    }
+
     @Test fun rectangleLassoSelectsWithADiagonalDragWhileFreeLassoRequiresAnEnclosure() = runBlocking {
         withCanvas { model, view ->
             withContext(Dispatchers.Main) {

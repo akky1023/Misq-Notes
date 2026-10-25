@@ -37,7 +37,7 @@ internal object EmbeddedImages {
         return ImageData(bytes.toByteArray())
     }
     /** Staging gives PdfRenderer a seekable descriptor and releases all provider access before commit. */
-    suspend fun read(context: Context, uri: Uri): List<ImageData> {
+    suspend fun read(context: Context, uri: Uri, selectPages: suspend (Int) -> List<Int> = { (0 until it).toList() }): List<ImageData> {
         val file = File.createTempFile("note-import-", ".source", context.cacheDir)
         try {
             checkNotNull(context.contentResolver.openInputStream(uri)).use { input -> file.outputStream().use { out ->
@@ -62,13 +62,18 @@ internal object EmbeddedImages {
                     decoder.setTargetSize(w, h)
                     decoder.setOnPartialImageListener { false }
                 }
-                try { return listOf(encode(bitmap)) } finally { bitmap.recycle() }
+                try {
+                    currentCoroutineContext().ensureActive()
+                    return listOf(encode(bitmap)).also { currentCoroutineContext().ensureActive() }
+                } finally { bitmap.recycle() }
             }
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
                 PdfRenderer(descriptor).use { document ->
                     require(document.pageCount in 1..200) { "PDF must have between 1 and 200 pages" }
+                    val pages = selectPages(document.pageCount).distinct().sorted()
+                    require(pages.isNotEmpty() && pages.all { it in 0 until document.pageCount }) { "Select valid PDF pages" }
                     var total = 0L
-                    return (0 until document.pageCount).map { index ->
+                    return pages.map { index ->
                         currentCoroutineContext().ensureActive()
                         document.openPage(index).use { page ->
                             // Render at twice the document's logical width, with a fixed allocation ceiling.
@@ -80,6 +85,7 @@ internal object EmbeddedImages {
                                 bitmap.eraseColor(Color.WHITE)
                                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                                 encode(bitmap).also {
+                                    currentCoroutineContext().ensureActive()
                                     total += it.png.size
                                     require(total <= 64L * 1024 * 1024) { "Imported pages exceed 64 MB" }
                                 }

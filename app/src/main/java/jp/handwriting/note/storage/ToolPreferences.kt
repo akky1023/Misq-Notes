@@ -19,6 +19,8 @@ internal data class ToolPreferences(
     val toolOrder: List<EditorTool> = EditorTool.entries.toList(),
     val buttonActions: List<PenButtonAction> = PenButtonState.defaults,
     val lassoMode: LassoMode = LassoMode.FREE,
+    val pinchResizeMedia: Boolean = true,
+    val lassoIncludeMedia: Boolean = false,
 ) {
     init {
         require(listOf(widths, highlighterWidths, eraserWidths).all { it.size == 3 && it.all { value -> value in 1..50 } })
@@ -43,7 +45,7 @@ internal class ToolPreferencesFile(private val file: File) {
     fun write(value: ToolPreferences) {
         check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())
         val bytes = ByteArrayOutputStream().also { buffer -> DataOutputStream(buffer).use { out ->
-            out.writeInt(10); value.widths.forEach(out::writeInt)
+            out.writeInt(11); value.widths.forEach(out::writeInt)
             out.writeInt(value.highlighterColor); out.writeInt(value.highlighterSize)
             value.highlighterWidths.forEach(out::writeInt); value.eraserWidths.forEach(out::writeInt)
             out.writeInt(value.eraserSize)
@@ -51,12 +53,14 @@ internal class ToolPreferencesFile(private val file: File) {
             value.toolOrder.forEach { out.writeInt(it.ordinal) }
             value.buttonActions.forEach { out.writeInt(it.ordinal) }
             out.writeInt(value.lassoMode.ordinal)
+            out.writeBoolean(value.pinchResizeMedia)
+            out.writeBoolean(value.lassoIncludeMedia)
         } }.toByteArray()
         NoteFiles.atomicWrite(file, bytes)
     }
     private fun decode(bytes: ByteArray): ToolPreferences = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
         try {
-            val version = input.readInt(); require(version in 1..10)
+            val version = input.readInt(); require(version in 1..11)
             val widths = List(3) { input.readInt() }; val color = input.readInt(); val size = input.readInt()
             val result = if (version == 1) {
                 require(widths.all { it in 1..100 } && size in 1..100)
@@ -80,8 +84,9 @@ internal class ToolPreferencesFile(private val file: File) {
             val shaped = if (version >= 10) assigned.copy(lassoMode = input.readInt().let {
                 require(it in LassoMode.entries.indices); LassoMode.entries[it]
             }) else assigned
+            val media = if (version >= 11) shaped.copy(pinchResizeMedia = input.readBoolean(), lassoIncludeMedia = input.readBoolean()) else shaped
             require(input.available() == 0)
-            shaped
+            media
         } catch (e: IllegalArgumentException) { throw IOException("Invalid tool preferences", e) }
     }
 }

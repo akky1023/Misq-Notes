@@ -103,9 +103,9 @@
     <string name="retry_settings" formatted="false">"Retry saving settings"</string>
     <string name="width_slot">"Width preset %1$s: %2$s"</string>
     <string name="edit_width_preset" formatted="false">"Edit width preset"</string>
-    <string name="duplicate_selection" formatted="false">"Duplicate selected strokes"</string>
+    <string name="duplicate_selection" formatted="false">"Duplicate selected items"</string>
     <string name="capture_selection" formatted="false">"Capture selection"</string>
-    <string name="delete_selection" formatted="false">"Delete selected strokes"</string>
+    <string name="delete_selection" formatted="false">"Delete selected items"</string>
     <string name="clear_selection" formatted="false">"Clear selection"</string>
     <string name="share" formatted="false">"Share"</string>
     <string name="copied_to_clipboard" formatted="false">"Copied to clipboard"</string>
@@ -219,9 +219,15 @@
     <string name="margin_color">Vertical line color</string>
     <string name="margin_width">Vertical line width: %1$s</string>
     <string name="margin_offset">Distance from left edge: %1$s</string>
-    <string name="import_photo">Import photo</string>
-    <string name="import_pdf">Import PDF</string>
+    <string name="import_document">Import image/PDF</string>
     <string name="import_complete">Imported into this note. The original file can be deleted.</string>
     <string name="import_failed">Could not import: %1$s</string>
     <string name="import_save_failed">Could not save imported content. Please retry saving.</string>
+    <string name="import_select_pages">Select PDF pages to import</string>
+    <string name="import_page">Page %1$s</string>
+    <string name="import_select_all">Select all</string>
+    <string name="import_clear_pages">Clear all</string>
+    <string name="import_cancel">Cancel</string>
+    <string name="pinch_resize_media">Pinch to resize selected media</string>
+    <string name="lasso_include_media">Include media in lasso selection</string>
 </resources>
