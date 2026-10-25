@@ -171,13 +171,13 @@ internal fun FloatingEditorToolbar(
     }
     @Composable fun Colors() {
         if (ui.tool in listOf(EditorTool.PEN, EditorTool.HIGHLIGHTER)) {
-            palette.colors.forEach { rgb -> ColorSwatch(rgb, PenStyle.rgb(ui.color) == rgb, !ui.busy) { onColor(rgb) } }
+            palette.colors.forEach { rgb -> ColorSwatch(rgb, PenStyle.rgb(ui.color) == PenStyle.rgb(rgb), !ui.busy) { onColor(rgb) } }
             PaletteAction(!ui.busy) { dialog = "color" }
         }
     }
     @Composable fun Widths() {
         preferences.value.widthsFor(ui.tool).forEachIndexed { slot, width ->
-            WidthPreset(slot, width, ui.size.toInt() == width, !ui.busy && ui.tool != EditorTool.LASSO,
+            WidthPreset(slot, width, ui.size == width.toFloat(), !ui.busy && ui.tool != EditorTool.LASSO,
                 { onSize(width) }, { dialog = "preset:$slot" }, compact = true, eraser = ui.tool == EditorTool.ERASER)
         }
     }

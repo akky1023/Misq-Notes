@@ -97,10 +97,9 @@ internal fun WidthPreset(slot: Int, width: Int, active: Boolean, enabled: Boolea
             customActions = listOf(CustomAccessibilityAction(AppMessages.text(R.string.edit_width_preset)) { if (enabled) onSave(); enabled })
         },
         shape = CircleShape,
-        color = MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
-        border = if (active) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceColorAtElevation(3.dp),
     ) {
-        val color = MaterialTheme.colorScheme.onSurface
+        val color = if (active) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
         Canvas(Modifier.fillMaxSize()) {
             if (eraser) drawCircle(color, width / 50f * 12.dp.toPx(), style = androidx.compose.ui.graphics.drawscope.Stroke(1.5.dp.toPx()))
             else {
@@ -140,7 +139,7 @@ internal fun ColorSwatch(rgb: Int, active: Boolean, enabled: Boolean, onClick: (
             selected = active
         },
         shape = CircleShape,
-        color = if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+        color = if (active) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
     ) {
         Box(contentAlignment = Alignment.Center) {
             val color = Color(rgb or 0xFF000000.toInt())
