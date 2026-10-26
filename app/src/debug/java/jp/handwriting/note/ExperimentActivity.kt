@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import jp.handwriting.note.editor.EditorViewModel
 import jp.handwriting.note.storage.RealDataExperiment
+import jp.handwriting.note.storage.MisqTestCopy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
@@ -23,7 +24,7 @@ class ExperimentActivity : MainActivity() {
     internal var verificationFailure: Exception? = null
     private val picker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
-        if (result.resultCode == RESULT_OK && uri == RealDataExperiment.tree) {
+        if (result.resultCode == RESULT_OK && (uri == RealDataExperiment.tree || uri == MisqTestCopy.tree)) {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             getSharedPreferences("startup-experiment", MODE_PRIVATE).edit().putBoolean("externalGranted", true).apply()
         }
@@ -31,9 +32,10 @@ class ExperimentActivity : MainActivity() {
     }
     override fun startNotebook(model: EditorViewModel) {
         experimentModel = model
-        if (intent.action == "jp.handwriting.note.CHOOSE_EXPERIMENT_COPY") {
+        if (intent.action == "jp.handwriting.note.CHOOSE_EXPERIMENT_COPY" || intent.action == "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY") {
+            val tree = if (intent.action == "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY") MisqTestCopy.tree else RealDataExperiment.tree
             picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).putExtra(DocumentsContract.EXTRA_INITIAL_URI,
-                DocumentsContract.buildDocumentUriUsingTree(RealDataExperiment.tree, DocumentsContract.getTreeDocumentId(RealDataExperiment.tree))))
+                DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))))
             return
         }
         val started = SystemClock.elapsedRealtime()

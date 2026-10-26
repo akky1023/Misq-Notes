@@ -8,11 +8,35 @@ import java.io.FileOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
+import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 
-/** A one-time, verified local backup before the first packed-format connection. */
+/** A verified, separately named backup before each storage-format migration. */
 internal object PreMigrationBackup {
-    fun ensure(context: Context) {
-        val backup = File(context.noBackupFilesDir, "before-packed-v1.zip")
+    /** Explicit maintenance export to app-owned external storage; no provider handoff is needed. */
+    fun copyForAdb(context: Context) {
+        val name = "before-misq-v2.zip"
+        val source = File(context.noBackupFilesDir, name)
+        val target = File(checkNotNull(context.getExternalFilesDir(null)), name)
+        fun hash(file: File): ByteArray = MessageDigest.getInstance("SHA-256").let { digest ->
+            file.inputStream().use { input ->
+                val buffer = ByteArray(65536)
+                while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
+            }
+            digest.digest()
+        }
+        if (target.exists() && hash(source).contentEquals(hash(target))) return
+        val temporary = File(target.path + ".tmp")
+        FileOutputStream(temporary).use { output -> source.inputStream().use { it.copyTo(output) }; output.fd.sync() }
+        check(hash(source).contentEquals(hash(temporary)))
+        Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+        android.util.Log.i("MisqBackup", "adbBackupReady=true bytes=${target.length()}")
+    }
+    fun ensure(context: Context, name: String = "before-packed-v1.zip") {
+        require(name in setOf("before-packed-v1.zip", "before-misq-v2.zip"))
+        val backup = File(context.noBackupFilesDir, name)
         if (!backup.exists()) {
             val source = buildMap<String, File> {
                 context.filesDir.walkTopDown().filter { it.isFile }.forEach { put("files/" + it.relativeTo(context.filesDir).invariantSeparatorsPath, it) }
@@ -46,7 +70,7 @@ internal object PreMigrationBackup {
         }.onFailure { android.util.Log.w("MisqBackup", "Probe signing check failed", it) }.getOrDefault(false)
         android.util.Log.i("MisqBackup", "backupReady=true trustedProbe=$trustedProbe")
         if (context.packageName == "net.neomenia.misqnotes" && trustedProbe) {
-            val exported = File(context.cacheDir, "exports/before-packed-v1.zip").also { it.parentFile!!.mkdirs() }
+            val exported = File(context.cacheDir, "exports/$name").also { it.parentFile!!.mkdirs() }
             if (!exported.exists()) backup.copyTo(exported)
             val uri = FileProvider.getUriForFile(context, context.packageName + ".files", exported)
             runCatching { context.grantUriPermission("net.neomenia.misqnotes.probe", uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }

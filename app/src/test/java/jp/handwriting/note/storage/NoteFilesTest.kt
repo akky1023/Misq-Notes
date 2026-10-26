@@ -12,7 +12,7 @@ import org.junit.rules.TemporaryFolder
 class NoteFilesTest {
     @get:Rule val temp = TemporaryFolder()
     @Test fun paperAndBothTimesSurviveManifestReloadAndSummary() {
-        val files = NoteFiles(temp.newFolder())
+        val files = NoteFiles(temp.newFolder(), false)
         val paper = NotePaper(0xFF112233.toInt(), PaperPattern.COLLEGE_RULED, 0x40556677, 48, 2.5f, 0x80123456.toInt(), 4f, 125f)
         val empty = files.create("paper", 1234, paper)
         val modified = empty.copy(info = empty.info.copy(updatedAt = 5678))
@@ -22,7 +22,7 @@ class NoteFilesTest {
         assertEquals(paper, summary.paper); assertEquals(1234L, summary.createdAt); assertEquals(5678L, summary.updatedAt)
     }
     @Test fun versionTwoNotesKeepTheirBackgroundAndReceiveThePreviousLineThickness() {
-        val root = temp.newFolder(); val files = NoteFiles(root); val empty = files.create("legacy paper", 1234)
+        val root = temp.newFolder(); val files = NoteFiles(root, false); val empty = files.create("legacy paper", 1234)
         val bytes = java.io.ByteArrayOutputStream().also { buffer -> java.io.DataOutputStream(buffer).use { out ->
             out.writeInt(0x484E4D31); out.writeInt(2); out.writeUTF(empty.info.id); out.writeUTF("legacy paper")
             out.writeLong(1234); out.writeLong(5678); out.writeFloat(1f); out.writeFloat(0f); out.writeFloat(0f)
@@ -36,7 +36,7 @@ class NoteFilesTest {
         files.save(loaded) { error("No strokes") }; assertEquals(loaded, files.read(empty.info.id).manifest)
     }
     @Test fun versionOneNotesKeepTheirTimesAndReceiveThePreviousPaperColor() {
-        val root = temp.newFolder(); val files = NoteFiles(root); val empty = files.create("legacy", 1234)
+        val root = temp.newFolder(); val files = NoteFiles(root, false); val empty = files.create("legacy", 1234)
         val bytes = java.io.ByteArrayOutputStream().also { buffer -> java.io.DataOutputStream(buffer).use { out ->
             out.writeInt(0x484E4D31); out.writeInt(1); out.writeUTF(empty.info.id); out.writeUTF("legacy")
             out.writeLong(1234); out.writeLong(5678); out.writeFloat(1f); out.writeFloat(0f); out.writeFloat(0f)
@@ -49,7 +49,7 @@ class NoteFilesTest {
     }
     private fun ref(id: Long) = StrokeRef(id, UUID.randomUUID().toString())
     @Test fun integerWidthEndpointsAndTransparencySurviveManifestReload() {
-        val files = NoteFiles(temp.newFolder())
+        val files = NoteFiles(temp.newFolder(), false)
         val empty = files.create("style")
         for (size in listOf(1f, 100f)) for (color in listOf(0x00123456, 0x80123456.toInt(), 0xFF123456.toInt())) {
             val note = empty.copy(info = empty.info.copy(size = size, color = color))
@@ -59,18 +59,18 @@ class NoteFilesTest {
     }
     @Test fun roundTripKeepsIdentityViewportStyleAndOpaqueStrokeBytes() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val empty = files.create("  講義「数学」  ", 1234)
         val stroke = ref(7)
         val note = empty.copy(info = empty.info.copy(position = ViewPosition(2f, 300f, 9000f), color = 0xFF205EB8.toInt(), size = 4f), strokes = listOf(stroke), nextId = 10)
         files.save(note) { byteArrayOf(1, 2, 3, 4) }
-        val reopened = NoteFiles(root)
+        val reopened = NoteFiles(root, false)
         assertEquals(note, reopened.read(empty.info.id).manifest)
         assertArrayEquals(byteArrayOf(1, 2, 3, 4), reopened.stroke(empty.info.id, stroke.storageId))
         assertEquals("講義「数学」", reopened.list().single().title)
     }
     @Test fun failedStrokeWriteCannotCommitNewManifest() {
-        val files = NoteFiles(temp.newFolder())
+        val files = NoteFiles(temp.newFolder(), false)
         val original = files.create("original")
         val refs = listOf(ref(1), ref(2))
         try {
@@ -83,17 +83,17 @@ class NoteFilesTest {
     }
     @Test fun unchangedStrokesAreNotEncodedOnEverySaveOrAfterRestart() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val original = files.create("note")
         val ref = ref(1)
         val updated = original.copy(strokes = listOf(ref), nextId = 2)
         files.save(updated) { byteArrayOf(1) }
-        NoteFiles(root).save(updated) { error("unchanged stroke should not be encoded") }
+        NoteFiles(root, false).save(updated) { error("unchanged stroke should not be encoded") }
         assertEquals(updated, files.read(original.info.id).manifest)
     }
     @Test fun corruptManifestFallsBackAndCanBeSavedWithoutDestroyingGoodBackup() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val original = files.create("old")
         files.rename(original.info.id, "new")
         val manifest = File(root, "${original.info.id}/manifest.hwn")
@@ -107,7 +107,7 @@ class NoteFilesTest {
     }
     @Test fun interruptionBetweenRenamesUsesBackupAndIgnoresTemporaryFile() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val original = files.create("old")
         files.rename(original.info.id, "new")
         val manifest = File(root, "${original.info.id}/manifest.hwn")
@@ -118,7 +118,7 @@ class NoteFilesTest {
     }
     @Test fun orphanCollectionRetainsBothCommittedGenerations() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val empty = files.create("note")
         val a = ref(1); val b = ref(2); val c = ref(3)
         for (stroke in listOf(a, b, c)) files.save(empty.copy(strokes = listOf(stroke), nextId = 4)) { byteArrayOf(1) }
@@ -129,14 +129,14 @@ class NoteFilesTest {
     }
     @Test fun corruptStrokeIsDetectedInsteadOfReturningPartialData() {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = NoteFiles(root, false)
         val empty = files.create("note"); val stroke = ref(1)
         files.save(empty.copy(strokes = listOf(stroke), nextId = 2)) { byteArrayOf(1, 2, 3) }
         File(root, "${empty.info.id}/${stroke.storageId}.ink").writeBytes(byteArrayOf(4, 5))
         try { files.stroke(empty.info.id, stroke.storageId); fail("corruption must be reported") } catch (_: IOException) { }
     }
     @Test fun renameAndDeleteKeepOtherNotebooksIntact() {
-        val root = temp.newFolder(); val files = NoteFiles(root)
+        val root = temp.newFolder(); val files = NoteFiles(root, false)
         val a = files.create("A"); val b = files.create("B")
         files.rename(a.info.id, "A renamed")
         assertEquals("A renamed", files.read(a.info.id).manifest.info.title)
@@ -145,13 +145,13 @@ class NoteFilesTest {
         assertFalse(File(root, a.info.id).exists())
     }
     @Test fun identifiersCannotEscapeStorageDirectory() {
-        val files = NoteFiles(temp.newFolder())
+        val files = NoteFiles(temp.newFolder(), false)
         assertThrows(IllegalArgumentException::class.java) { files.delete("../other") }
         assertThrows(IllegalArgumentException::class.java) { files.read("../other") }
     }
 
     @Test fun versionThreeNotesRetainPaperAndUseDefaultMargin() {
-        val root = temp.newFolder(); val files = NoteFiles(root)
+        val root = temp.newFolder(); val files = NoteFiles(root, false)
         val note = files.create("legacy", 1234, NotePaper(pattern = PaperPattern.RULED, lineWidth = 3f))
         val file = File(root, "${note.info.id}/manifest.hwn")
         val bytes = NoteFiles.readEnvelope(file)

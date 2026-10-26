@@ -82,8 +82,10 @@ internal data class LibraryPreferences(val folders: List<NoteFolder> = emptyList
 internal class LibraryPreferencesFile(private val file: File) {
     fun read(): LibraryPreferences {
         val backup = File(file.path + ".bak")
-        if (!file.exists() && !backup.exists()) return LibraryPreferences()
-        return try { decode(NoteFiles.readEnvelope(file)) } catch (_: Exception) { decode(NoteFiles.readEnvelope(backup)) }
+        val settings = if (!file.exists() && !backup.exists()) LibraryPreferences()
+            else try { decode(NoteFiles.readEnvelope(file)) } catch (_: Exception) { decode(NoteFiles.readEnvelope(backup)) }
+        val json = File(file.parentFile, "library.json")
+        return if (json.exists() || File(json.path + ".bak").exists()) LibraryJson.read(json, settings) else settings
     }
     fun write(value: LibraryPreferences) {
         check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())
@@ -102,6 +104,7 @@ internal class LibraryPreferencesFile(private val file: File) {
             value.paper.writeMargin(out)
         } }.toByteArray()
         NoteFiles.atomicWrite(file, bytes)
+        LibraryJson.write(File(file.parentFile, "library.json"), value)
     }
     private fun decode(bytes: ByteArray): LibraryPreferences = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
         try {

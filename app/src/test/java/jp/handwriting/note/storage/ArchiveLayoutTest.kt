@@ -14,7 +14,7 @@ class ArchiveLayoutTest {
     }
     @Test fun separatesNoteManifestsStrokesAndPortableSettings() {
         val root = temp.newFolder()
-        val note = NoteFiles(File(root, "notes")).create("無題")
+        val note = NoteFiles(File(root, "notes"), false).create("無題")
         val manifest = blob(File(root, "notes/${note.info.id}/manifest.hwn"))
         assertEquals("notes/manifests/${manifest.first}", ArchiveLayout.path(manifest.first, manifest.second))
         val strokeFile = File(root, "stroke"); NoteFiles.atomicWrite(strokeFile, java.nio.ByteBuffer.allocate(8).putInt(0x484E5331).putInt(1).array())

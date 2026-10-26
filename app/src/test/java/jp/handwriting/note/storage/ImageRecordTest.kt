@@ -17,12 +17,12 @@ class ImageRecordTest {
         val expected = source.readBytes()
         val record = ImageRecord(ImageData(source.readBytes()), 20f, 300f, 900f, 600f)
         assertTrue(source.delete())
-        val notes = File(root, "notes"); val files = NoteFiles(notes)
+        val notes = File(root, "notes"); val files = NoteFiles(notes, false)
         val empty = files.create("Imported photo")
         val ref = StrokeRef(1, java.util.UUID.randomUUID().toString())
         val manifest = empty.copy(strokes = listOf(ref), nextId = 2)
         files.save(manifest) { record.encode() }
-        val restored = ImageRecord.decode(NoteFiles(notes).stroke(empty.info.id, ref.storageId))
+        val restored = ImageRecord.decode(NoteFiles(notes, false).stroke(empty.info.id, ref.storageId))
         assertArrayEquals(expected, restored.data.png)
         assertEquals(12, restored.data.width); assertEquals(8, restored.data.height)
 

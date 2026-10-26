@@ -30,6 +30,7 @@ class NotePersistenceTest {
         try {
             val repo = NoteRepository(NoteFiles(root))
             val empty = repo.create("講義ノート")
+            assertNotNull(android.graphics.BitmapFactory.decodeFile(NoteRepository(NoteFiles(root)).preview(empty.info.id).path))
             val entries = listOf(
                 OrderedEdits.Entry(2L, stroke(0xFF205EB8.toInt())),
                 OrderedEdits.Entry(7L, stroke(0xFFB93838.toInt(), true)),
@@ -62,14 +63,16 @@ class NotePersistenceTest {
             repo.save(NoteSnapshot(first, listOf(a)))
             val b = OrderedEdits.Entry(2L, stroke(0xFF205EB8.toInt()))
             repo.save(NoteSnapshot(first.copy(strokes = first.strokes + StrokeRef(b.id, b.value.storageId), nextId = 3), listOf(a, b)))
-            File(root, "${empty.info.id}/${b.value.storageId}.ink").writeBytes(byteArrayOf(0))
+            val document = NoteFiles(root).document(empty.info.id)
+            val offset = document.index().records.getValue(b.value.storageId).offset
+            java.io.RandomAccessFile(document.file, "rw").use { it.seek(offset); it.write(0) }
             val loaded = NoteRepository(NoteFiles(root)).load(empty.info.id)
             assertTrue(loaded.recovered)
             assertEquals(first, loaded.manifest)
             assertEquals(a.value.storageId, loaded.entries.single().value.storageId)
         } finally { root.deleteRecursively() }
     }
-    @Test fun savingCollectsOldOrphansAndUndoCanRecreateTheirBlobs() {
+    @Test fun savingRetainsCausalHistoryAndUndoCanRestoreRemovedStrokes() {
         val root = folder()
         try {
             val repository = NoteRepository(NoteFiles(root))
@@ -79,14 +82,13 @@ class NotePersistenceTest {
                 repository.save(NoteSnapshot(empty.copy(strokes = listOf(StrokeRef(entry.id, entry.value.storageId)), nextId = 4), listOf(entry)))
             }
             entries.forEach(::save)
-            fun file(index: Int) = File(root, "${empty.info.id}/${entries[index].value.storageId}.ink")
-            assertFalse(file(0).exists())
-            assertTrue(file(1).exists()) // Previous committed generation remains recoverable.
-            assertTrue(file(2).exists())
-            save(entries[0]) // An in-memory Undo can restore a previously collected immutable stroke.
+            val document = NoteFiles(root).document(empty.info.id)
+            assertTrue(document.index().events.any { it.blob == null })
+            assertEquals(listOf(entries[2].value.storageId), document.index().manifest.strokes.map { it.storageId })
+            save(entries[0]) // In-memory Undo restores a removed stroke using its original identity.
             val loaded = NoteRepository(NoteFiles(root)).load(empty.info.id)
             assertEquals(entries[0].value.storageId, loaded.entries.single().value.storageId)
-            assertTrue(file(0).exists())
+            assertTrue(document.file.exists())
         } finally { root.deleteRecursively() }
     }
 }
