@@ -73,7 +73,9 @@ APKの出力先とアプリの識別情報は次のとおりです。本番版�
 
 Settings → Actions → Generalで「Allow GitHub Actions to create and approve pull requests」を有効にします。workflow自身が必要な`contents`・`issues`・`pull-requests`の書き込み権限を指定します。
 
-release-pleaseは標準の`GITHUB_TOKEN`を使い、本番ビルドは同じworkflowの後続jobで実行します。このため、リリースイベントで別workflowを起動するためのPATは不要です。Botが作成したリリースPRでは通常のPR CIが起動しませんが、マージ後の`main` CIと本番ビルドjobの両方で検証します。
+release-pleaseは標準の`GITHUB_TOKEN`を使い、本番ビルドは同じworkflowの後続jobで実行します。このため、リリースイベントで別workflowを起動するためのPATは不要です。Botが作成したリリースPRのCIには、GitHub側で実行承認が必要になる場合があります。PRの差分を確認し、Actionsで対象の実行を承認してください。マージ後も`main` CIと本番ビルドjobの両方で検証します。
+
+リリース後は`main`を`develop`へ取り込み、次の開発へバージョン更新を引き継いでください。
 
 ### APK添付に失敗した場合
 
