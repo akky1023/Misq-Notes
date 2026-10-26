@@ -94,7 +94,7 @@ class NoteListDragTest {
                         try { File(instrumentation.targetContext.cacheDir, "codex-library-grid.png").outputStream().use { screenshot.compress(Bitmap.CompressFormat.PNG, 100, it) } }
                         finally { screenshot.recycle() }
                     }
-                    val from = bounds("Drag Aの先頭1000×1000"); val to = bounds("Drag Bの先頭1000×1000")
+                    val from = bounds(AppMessages.text(R.string.note_thumbnail, "Drag A")); val to = bounds(AppMessages.text(R.string.note_thumbnail, "Drag B"))
                     drag(from, to)
                     try {
                         waitUntil("reorder in grid=$grid") { model.library.value.value.orders[""] == listOf(b.info.id, a.info.id) }
@@ -102,7 +102,7 @@ class NoteListDragTest {
                         throw AssertionError("grid=$grid from=$from to=$to actual=${model.library.value.value} open=${model.workspace.value.current?.id}", failure)
                     }
                     SystemClock.sleep(150)
-                    drag(bounds("Drag Aの先頭1000×1000"), bounds("フォルダ：Drop target"))
+                    drag(bounds(AppMessages.text(R.string.note_thumbnail, "Drag A")), bounds(AppMessages.text(R.string.folder_description, "Drop target")))
                     waitUntil("folder drop in grid=$grid") { model.library.value.value.locations[a.info.id] == folder }
                     assertNull("Dragging must not open a note", model.workspace.value.current)
                 }

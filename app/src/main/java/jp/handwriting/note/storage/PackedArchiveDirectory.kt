@@ -54,6 +54,16 @@ internal class PackedArchiveDirectory(private val files: PackedFiles) : ArchiveD
         }
         return decoded.getValue(name)
     }
+    override fun visit(names: List<String>, accept: (String, ByteArray) -> Unit) {
+        // Logical UUID order scatters nearby records across hundreds of old packs. Stream each
+        // physical pack once, keeping memory bounded even when the whole archive exceeds cache.
+        names.groupBy { records.getValue(it) }.forEach { (pack, members) ->
+            val decoded = cache[pack] ?: files.read(pack).let { bytes ->
+                check(NotebookArchive.digest(bytes) == pack.removePrefix("pack-")); decodePack(bytes)
+            }
+            members.forEach { accept(it, decoded.getValue(it)) }
+        }
+    }
     override fun write(name: String, bytes: ByteArray) {
         check(ArchiveLayout.complete(name, bytes))
         staged[name] = bytes; dirty = true

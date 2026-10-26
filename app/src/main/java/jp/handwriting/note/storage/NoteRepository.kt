@@ -66,12 +66,17 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         if (recent?.manifest?.info?.id == id) recent = null
     }
     @Synchronized fun preview(id: String): File {
+        files.storedThumbnail(id)?.let { return it }
         val target = files.thumbnail(id)
         if (!files.thumbnailIsCurrent(id)) {
             val loaded = load(id)
             thumbnail(NoteSnapshot(loaded.manifest, loaded.entries))
         }
         return target
+    }
+    @Synchronized fun updatePreview(snapshot: NoteSnapshot) {
+        // A delayed preview must not attach an older snapshot to a newer committed note.
+        if (files.read(snapshot.manifest.info.id).manifest == snapshot.manifest) thumbnail(snapshot)
     }
     @Synchronized fun save(snapshot: NoteSnapshot) {
         val strokes = snapshot.entries.associateBy { it.value.storageId }
@@ -116,7 +121,10 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         val key = previewPaper to entries.map { it.value.storageId }
         val target = files.thumbnail(info.id)
         if (target.exists() && (thumbnailKeys[info.id] == key || (info.id !in thumbnailKeys && files.thumbnailIsCurrent(info.id)))) {
-            thumbnailKeys[info.id] = key; files.markThumbnailCurrent(info.id); return
+            thumbnailKeys[info.id] = key
+            if (!files.thumbnailIsCurrent(info.id)) persist { files.markThumbnailCurrent(info.id) }
+            else files.markThumbnailCurrent(info.id)
+            return
         }
         // A preview is a disposable cache; it must never prevent the note from being saved.
         runCatching {
@@ -130,9 +138,10 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
                     else thumbnailRenderer.draw(canvas, it.value.ink, transform)
                 }
                 val temporary = File(target.path + ".tmp")
+                check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs())
                 FileOutputStream(temporary).use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)); output.fd.sync() }
                 Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
-                files.markThumbnailCurrent(info.id)
+                persist { files.markThumbnailCurrent(info.id) }
                 listCache?.thumbnail(info.id, target.path)
                 thumbnailKeys[info.id] = key
             } finally { bitmap.recycle() }

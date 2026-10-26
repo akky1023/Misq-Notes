@@ -6,7 +6,7 @@ import android.provider.DocumentsContract
 import java.io.ByteArrayOutputStream
 
 /** Only enumerates packed-v1; the old per-stroke directories remain untouched for rollback. */
-internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri) : PackedFiles {
+internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String = "packed-v1") : PackedFiles {
     private val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
     private var folder: Uri? = null
     private var known = mutableMapOf<String, Uri>()
@@ -17,22 +17,31 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         }
     }
     override fun names(): Set<String> {
-        if (folder == null) folder = children(root)["packed-v1"]
+        if (folder == null) folder = locate(false)
         known = folder?.let(::children) ?: mutableMapOf()
         return known.keys.toSet()
+    }
+    private fun locate(create: Boolean): Uri? {
+        var parent = root
+        for (name in directoryName.split('/')) {
+            require(name.isNotBlank() && name != "." && name != "..")
+            parent = children(parent)[name] ?: if (create) checkNotNull(DocumentsContract.createDocument(
+                resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, name)) else return null
+        }
+        return parent
     }
     override fun read(name: String): ByteArray = checkNotNull(resolver.openInputStream(known.getValue(name))).use { input ->
         val output = ByteArrayOutputStream(); val buffer = ByteArray(8192)
         while (true) {
             val count = input.read(buffer); if (count < 0) break
-            check(output.size().toLong() + count <= PackedArchiveDirectory.MAX_BYTES)
+            check(output.size().toLong() + count <= 512L * 1024 * 1024)
             output.write(buffer, 0, count)
         }
         output.toByteArray()
     }
     override fun write(name: String, bytes: ByteArray) {
         if (name in known) { check(read(name).contentEquals(bytes)); return }
-        if (folder == null) folder = checkNotNull(DocumentsContract.createDocument(resolver, root, DocumentsContract.Document.MIME_TYPE_DIR, "packed-v1"))
+        if (folder == null) folder = checkNotNull(locate(true))
         val uri = checkNotNull(DocumentsContract.createDocument(resolver, checkNotNull(folder), "application/octet-stream", name))
         checkNotNull(resolver.openOutputStream(uri, "w")).use { it.write(bytes); it.flush() }
         known[name] = uri

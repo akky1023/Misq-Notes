@@ -13,6 +13,12 @@ internal interface ArchiveDirectory {
     fun names(): Set<String>
     fun read(name: String): ByteArray
     fun readBatch(names: List<String>): List<ByteArray> = names.map(::read)
+    fun visit(names: List<String>, accept: (String, ByteArray) -> Unit) {
+        for (batch in names.chunked(4)) {
+            val contents = readBatch(batch); check(contents.size == batch.size)
+            batch.zip(contents).forEach { (name, bytes) -> accept(name, bytes) }
+        }
+    }
     fun write(name: String, bytes: ByteArray)
     fun delete(name: String)
     fun commit() {}
@@ -96,13 +102,10 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
                 }
                 val missing = revision.files.values.distinct().filter { it !in matched }
                 // A few small SAF streams in parallel amortize per-document provider round trips.
-                for (batch in missing.chunked(4)) {
-                    val contents = directory.readBatch(batch.map { "blob-$it" })
-                    check(contents.size == batch.size)
-                    batch.zip(contents).forEach { (hash, bytes) ->
+                directory.visit(missing.map { "blob-$it" }) { name, bytes ->
+                        val hash = name.removePrefix("blob-")
                         check(digest(bytes) == hash) { AppMessages.text(R.string.storage_corrupt) }
                         verified += hash; remember(hash, bytes)
-                    }
                 }
                 true
             }.getOrDefault(false)
@@ -115,9 +118,16 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
         return null
     }
     fun restore(revision: Revision, target: File) {
-        revision.files.forEach { (path, hash) ->
-            val bytes = readBlob(hash)
-            File(target, path).also { it.parentFile!!.mkdirs(); it.writeBytes(bytes) }
+        val byHash = revision.files.entries.groupBy { it.value }
+        fun save(hash: String, bytes: ByteArray) {
+            byHash.getValue(hash).forEach { (path, _) -> File(target, path).also { it.parentFile!!.mkdirs(); it.writeBytes(bytes) } }
+        }
+        val missing = mutableListOf<String>()
+        byHash.keys.forEach { hash -> readCache[hash]?.let { save(hash, it) } ?: missing.add("blob-$hash") }
+        directory.visit(missing) { name, bytes ->
+            val hash = name.removePrefix("blob-")
+            check(digest(bytes) == hash) { AppMessages.text(R.string.storage_corrupt) }
+            verified += hash; save(hash, bytes)
         }
     }
     fun commit(files: Map<String, File>) {
@@ -143,7 +153,10 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
         val names = directory.names()
         val actualHead = revisions(names).firstOrNull()
         val ownIncomplete = actualHead != null && actualHead == attemptedHead && runCatching { decode(directory.read(actualHead)) }.isFailure
-        if (observed && actualHead != observedHead && !ownIncomplete) throw ArchiveConflictException()
+        val ownComplete = actualHead != null && actualHead == attemptedHead &&
+            runCatching { decode(directory.read(actualHead)) == files.mapValues { it.value.hash } }.getOrDefault(false)
+        if (observed && actualHead != observedHead && !ownIncomplete && !ownComplete) throw ArchiveConflictException()
+        if (ownComplete) { observedHead = actualHead; attemptedHead = null; complete = Revision(checkNotNull(actualHead), files.mapValues { it.value.hash }) }
         val refs = files.toSortedMap().mapValues { (_, blob) ->
             val hash = blob.hash
             val name = "blob-$hash"
@@ -192,7 +205,9 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
                 chars[i * 2] = HEX[value ushr 4]; chars[i * 2 + 1] = HEX[value and 15]
             } }.concatToString()
         }
-        private fun validPath(path: String) = path in listOf("folders.hwp", "presets.hwp") || path.matches(Regex("notes/[a-f0-9-]{36}/(manifest\\.hwn(\\.bak)?|[a-f0-9-]{36}\\.ink(\\.bak)?)"))
+        private fun validPath(path: String) = path in listOf("folders.hwp", "presets.hwp") ||
+            path.matches(Regex("notes/[a-f0-9-]{36}\\.misq")) ||
+            path.matches(Regex("notes/[a-f0-9-]{36}/(manifest\\.hwn(\\.bak)?|[a-f0-9-]{36}\\.ink(\\.bak)?)"))
         internal fun encode(files: Map<String, String>): ByteArray {
             val body = ByteArrayOutputStream().also { buffer -> DataOutputStream(buffer).use { out ->
                 out.writeInt(0x484E4131); out.writeInt(files.size)

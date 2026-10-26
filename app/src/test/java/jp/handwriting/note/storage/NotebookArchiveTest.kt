@@ -30,7 +30,7 @@ class NotebookArchiveTest {
     }
     private fun fixture(): Pair<File, Map<String, File>> {
         val root = temp.newFolder()
-        val notes = NoteFiles(File(root, "notes")); val note = notes.create("無題")
+        val notes = NoteFiles(File(root, "notes"), false); val note = notes.create("無題")
         val folders = File(root, "folders.hwp"); NotebookFolders.write(folders, LibraryPreferences())
         return root to mapOf("folders.hwp" to folders, "notes/${note.info.id}/manifest.hwn" to File(root, "notes/${note.info.id}/manifest.hwn"))
     }

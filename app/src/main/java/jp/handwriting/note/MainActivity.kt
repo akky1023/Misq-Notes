@@ -17,6 +17,11 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import jp.handwriting.note.storage.PreMigrationBackup
 import jp.handwriting.note.editor.EditorViewModel
 import jp.handwriting.note.editor.InkCanvasView
 import jp.handwriting.note.editor.StylusNavigationGuard
@@ -76,6 +81,17 @@ open class MainActivity : ComponentActivity(), InputManager.InputDeviceListener 
         }
     }
     protected open fun startNotebook(model: EditorViewModel) {
+        if (intent.action == "net.neomenia.misqnotes.BACKUP_BEFORE_MISQ" && packageName == "net.neomenia.misqnotes") {
+            // This explicit maintenance launch must not open, migrate, or synchronize the library.
+            lifecycleScope.launch {
+                withContext(Dispatchers.IO) {
+                    PreMigrationBackup.ensure(this@MainActivity, "before-misq-v2.zip")
+                    PreMigrationBackup.copyForAdb(this@MainActivity)
+                }
+                finish()
+            }
+            return
+        }
         model.configureStorage(this)
         model.start(filesDir)
     }

@@ -120,6 +120,7 @@ class EditorViewModel : ViewModel() {
     private var repository: NoteRepository? = null
     private data class PendingSave(val info: NoteInfo, val nextId: Long, val entries: List<OrderedEdits.Entry<EditorStroke>>)
     private var saves: SaveQueue<PendingSave>? = null
+    private var previewSaves: SaveQueue<NoteSnapshot>? = null
     private var restoring = false
     private var lastRevision = -1L
     private var starting = false
@@ -209,9 +210,14 @@ class EditorViewModel : ViewModel() {
                     mutablePreferences.value = mutablePreferences.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.settings_save_failed, it) } ?: mutablePreferences.value.error?.takeIf { state.latest == 0L })
                 } }
+                previewSaves = SaveQueue(viewModelScope, batchMillis = 1000) { snapshot -> withContext(Dispatchers.IO) {
+                    repository!!.updatePreview(snapshot)
+                } }
                 saves = SaveQueue(viewModelScope, batchMillis = 500) { request -> withContext(Dispatchers.IO) {
                     val refs = request.entries.map { StrokeRef(it.id, it.value.storageId) }
-                    repository!!.save(NoteSnapshot(NoteManifest(request.info, refs, request.nextId), request.entries))
+                    val snapshot = NoteSnapshot(NoteManifest(request.info, refs, request.nextId), request.entries)
+                    repository!!.save(snapshot)
+                    previewSaves?.request(snapshot)
                 } }
                 launch { saves!!.state.collect { state ->
                     mutableWorkspace.value = mutableWorkspace.value.copy(saving = state.saving, saveFailed = state.error != null,
