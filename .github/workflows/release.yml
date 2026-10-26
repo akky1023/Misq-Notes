@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'APKを再ビルドする既存リリースのタグ（例: v0.1.4）。空欄ならリリースPRを更新'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.ref == 'refs/heads/main' && inputs.tag == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build-release:
+    needs: release-please
+    if: >-
+      always() && github.ref == 'refs/heads/main' &&
+      (needs.release-please.outputs.released == 'true' ||
+       (github.event_name == 'workflow_dispatch' && inputs.tag != ''))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release-please.outputs.tag || inputs.tag }}
+    steps:
+      - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          gh release view "$RELEASE_TAG" --json tagName --jq .tagName
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+          persist-credentials: false
+      - name: Check version
+        run: test "$(tr -d '\r\n' < version.txt)" = "${RELEASE_TAG#v}"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test and lint
+        run: bash ./gradlew :app:testDebugUnitTest :app:lintRelease --console=plain
+      - name: Build signed APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_BASE64" || { echo 'ANDROID_KEYSTORE_BASE64 is missing' >&2; exit 1; }
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo 'ANDROID_KEYSTORE_PASSWORD is missing' >&2; exit 1; }
+          umask 077
+          mkdir -p .signing
+          trap 'rm -f .signing/handwriting.p12' EXIT
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > .signing/handwriting.p12
+          bash ./gradlew :app:assembleRelease --no-daemon --console=plain
+      - name: Verify production APK
+        run: |
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          apk=app/build/outputs/apk/release/app-release.apk
+          "$tools/apksigner" verify --verbose --print-certs "$apk" | tee "$RUNNER_TEMP/signature.txt"
+          grep -Fx 'Signer #1 certificate SHA-256 digest: ec56f22a99c5b4ecbce8668b9c5cc71df365cb18bcac49e1fa1f4e5e3a177275' "$RUNNER_TEMP/signature.txt"
+          "$tools/aapt" dump badging "$apk" > "$RUNNER_TEMP/badging.txt"
+          grep -q "^package: name='net.neomenia.misqnotes' " "$RUNNER_TEMP/badging.txt"
+          grep -q "versionName='${RELEASE_TAG#v}'" "$RUNNER_TEMP/badging.txt"
+          if grep -q '^application-debuggable' "$RUNNER_TEMP/badging.txt"; then exit 1; fi
+          "$tools/zipalign" -c -P 16 4 "$apk"
+      - name: Prepare release files
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk "dist/Misq-notes-${RELEASE_TAG#v}.apk"
+          cd dist
+          sha256sum *.apk > SHA256SUMS
+      - name: Save release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Misq-notes-${{ env.RELEASE_TAG }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Attach APK and checksums to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+      - name: Clean signing material
+        if: always()
+        run: rm -f .signing/handwriting.p12

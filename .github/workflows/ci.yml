@@ -1,0 +1,49 @@
+name: Android CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Test, lint and build
+        run: bash ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleDebug :app:assembleRelease --console=plain
+      - name: Upload test APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Misq-notes-test-${{ github.run_number }}
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-reports-${{ github.run_number }}
+          path: |
+            app/build/reports/tests/
+            app/build/reports/lint-results-release.*
+          if-no-files-found: warn

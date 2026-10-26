@@ -42,11 +42,42 @@ APKの出力先とアプリの識別情報は次のとおりです。本番版�
 .\gradlew.bat :app:assembleRelease
 ```
 
-現在のビルド設定は、ローカルの`.signing/signing.properties`がある場合に、`.signing/handwriting.p12`を使って本番APKへ署名します。プロパティは`storePassword`、鍵のエイリアスは`handwriting`、形式はPKCS12です。
+本番APKは`.signing/handwriting.p12`で署名します。形式はPKCS12、鍵のエイリアスは`handwriting`です。パスワードは環境変数`ANDROID_KEYSTORE_PASSWORD`を優先し、未設定の場合はローカルの`.signing/signing.properties`の`storePassword`を使います。
 
 署名設定がない環境では未署名のAPKが生成されるため、インストール・配布前に自身の鍵で署名してください。既存アプリへの上書き更新には、同じapplicationIdと同じ署名鍵が必要です。
 
 署名鍵・パスワード・ローカル設定はGitへ追加しないでください。署名済みAPKの出力先は`app/build/outputs/apk/release/app-release.apk`です。
+
+## GitHubでの自動ビルドとリリース
+
+リポジトリは[akky1023/Misq-Notes](https://github.com/akky1023/Misq-Notes)です。デフォルトブランチは`main`、開発ブランチは`develop`です。
+
+- `main`・`develop`へのpushとPRで、単体テスト・lint・検証APK・本番APKのビルドを実行します。
+- 検証APKはActionsの`Misq-notes-test-*` artifactからダウンロードできます。本番署名鍵は通常のCIには渡しません。
+- `develop`から`main`への取り込みは、`fix: ...`や`feat: ...`のコミットが`main`に残る方法で行います。Squash mergeではPRタイトルも同じ形式にします。
+- `main`へのpushでrelease-pleaseがバージョン・変更履歴を更新するリリースPRを作成します。
+- リリースPRをマージすると`vX.Y.Z`タグとGitHub Releaseを作成し、テスト・lint・本番署名・証明書検証後にAPKと`SHA256SUMS`を添付します。
+
+バージョンは`version.txt`で管理し、release-pleaseが更新します。Androidの`versionCode`は`major × 1,000,000 + minor × 1,000 + patch`から求めます（minorとpatchは999以下）。`0.1.3`は`1003`となり、従来の`6`から上書き更新できます。`.release-please-manifest.json`はrelease-pleaseが追跡する直近バージョンです。
+
+### GitHub側の初期設定
+
+リポジトリのSettings → Secrets and variables → Actionsに、次のRepository secretsを登録します。
+
+| Secret | 内容 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | 既存の`.signing/handwriting.p12`をBase64化した値 |
+| `ANDROID_KEYSTORE_PASSWORD` | 同じ鍵の`storePassword` |
+
+既存のインストールへ更新できるよう、署名鍵を作り直さないでください。リリース時には証明書のSHA-256が`ec56f22a99c5b4ecbce8668b9c5cc71df365cb18bcac49e1fa1f4e5e3a177275`であることも検証します。Secretsの値をコミットやログへ記載しないでください。
+
+Settings → Actions → Generalで「Allow GitHub Actions to create and approve pull requests」を有効にします。workflow自身が必要な`contents`・`issues`・`pull-requests`の書き込み権限を指定します。
+
+release-pleaseは標準の`GITHUB_TOKEN`を使い、本番ビルドは同じworkflowの後続jobで実行します。このため、リリースイベントで別workflowを起動するためのPATは不要です。Botが作成したリリースPRでは通常のPR CIが起動しませんが、マージ後の`main` CIと本番ビルドjobの両方で検証します。
+
+### APK添付に失敗した場合
+
+Secrets不足や一時的な障害でAPKの作成・添付に失敗した場合は、原因を解消してActions → Release → Run workflowを開き、ブランチ`main`と既存のタグ（例：`v0.1.4`）を指定します。対象タグのソースを再ビルドして同じReleaseへ添付します。タグ欄を空にするとリリースPRの更新だけを実行します。
 
 ## 使用技術
 

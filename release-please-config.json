@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "simple",
+      "package-name": "Misq notes",
+      "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
+      "pull-request-header": "Misq notesのバージョンと変更履歴を更新します。",
+      "pull-request-footer": "",
+      "changelog-sections": [
+        { "type": "feat", "section": "機能追加" },
+        { "type": "fix", "section": "修正" },
+        { "type": "perf", "section": "性能改善" }
+      ]
+    }
+  }
+}

@@ -8,6 +8,13 @@ plugins {
 
 val localSigning = rootProject.file(".signing/signing.properties")
 val signingValues = Properties().apply { if (localSigning.exists()) localSigning.inputStream().use { load(it) } }
+val releaseVersion = rootProject.file("version.txt").readText().trim()
+require(Regex("\\d+\\.\\d+\\.\\d+").matches(releaseVersion)) { "version.txt must contain major.minor.patch" }
+val (majorVersion, minorVersion, patchVersion) = releaseVersion.split('.').map(String::toLong)
+require(minorVersion < 1000 && patchVersion < 1000) { "Minor and patch versions must be below 1000" }
+val releaseVersionCode = majorVersion * 1_000_000 + minorVersion * 1_000 + patchVersion
+require(releaseVersionCode in 1..2_100_000_000L) { "Android versionCode is out of range" }
+val releaseStorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: signingValues.getProperty("storePassword")
 
 android {
     namespace = "jp.handwriting.note"
@@ -16,19 +23,19 @@ android {
         applicationId = "net.neomenia.misqnotes"
         minSdk = 29
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.1.3"
+        versionCode = releaseVersionCode.toInt()
+        versionName = releaseVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
     // Both languages must be available for switching without a network download.
     bundle { language { enableSplit = false } }
     signingConfigs {
-        if (localSigning.exists()) create("localRelease") {
+        if (!releaseStorePassword.isNullOrBlank()) create("localRelease") {
             storeFile = rootProject.file(".signing/handwriting.p12")
-            storePassword = signingValues.getProperty("storePassword")
+            storePassword = releaseStorePassword
             keyAlias = "handwriting"
-            keyPassword = signingValues.getProperty("storePassword")
+            keyPassword = releaseStorePassword
             storeType = "PKCS12"
         }
     }
@@ -39,7 +46,7 @@ android {
         }
         release {
             isMinifyEnabled = false
-            if (localSigning.exists()) signingConfig = signingConfigs.getByName("localRelease")
+            if (!releaseStorePassword.isNullOrBlank()) signingConfig = signingConfigs.getByName("localRelease")
         }
     }
     compileOptions {
