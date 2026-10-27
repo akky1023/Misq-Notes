@@ -167,15 +167,25 @@ internal fun GeneralSettingsScreen(model: EditorViewModel, onBack: () -> Unit) {
 
 @Composable
 private fun StrokeCacheSettings(current: StrokeCacheMode, onChange: (StrokeCacheMode) -> Unit) {
-    Text(AppMessages.text(R.string.stroke_cache), style = MaterialTheme.typography.titleLarge)
+    var menu by remember { mutableStateOf(false) }
     val labels = listOf(R.string.stroke_cache_limited, R.string.stroke_cache_visible,
         R.string.stroke_cache_nearby, R.string.stroke_cache_all)
-    StrokeCacheMode.entries.forEach { mode ->
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .clickable(role = Role.RadioButton) { onChange(mode) }.padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(current == mode, onClick = null)
-            Text(AppMessages.text(labels[mode.ordinal]), Modifier.padding(start = 8.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(AppMessages.text(R.string.stroke_cache), Modifier.weight(1f))
+        Box(Modifier.weight(2f), contentAlignment = Alignment.CenterEnd) {
+            TextButton(onClick = { menu = true },
+                modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.stroke_cache) }) {
+                Text(AppMessages.text(labels[current.ordinal]), Modifier.weight(1f, fill = false))
+                Icon(ToolbarIcons.Expand, null, Modifier.padding(start = 8.dp))
+            }
+            DropdownMenu(menu, { menu = false }) {
+                StrokeCacheMode.entries.forEach { mode ->
+                    DropdownMenuItem({ Text(AppMessages.text(labels[mode.ordinal])) }, {
+                        menu = false
+                        onChange(mode)
+                    })
+                }
+            }
         }
     }
     Text(AppMessages.text(R.string.stroke_cache_help), style = MaterialTheme.typography.bodySmall)
