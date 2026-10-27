@@ -13,10 +13,24 @@ import jp.handwriting.note.storage.NotePaper
 import java.io.OutputStream
 import kotlin.math.ceil
 import kotlin.math.sqrt
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 internal enum class NoteExportFormat(val extension: String, val mime: String) { PDF("pdf", "application/pdf"), PNG("png", "image/png") }
 
 internal object NoteExport {
+    /** Bounded bitmap for the complete document; never allocates an export-sized image. */
+    suspend fun preview(strokes: List<EditorStroke>, paper: NotePaper, bounds: RectF = noteBounds(strokes)): Bitmap {
+        val scale = minOf(360f / bounds.width(), 1200f / bounds.height())
+        val bitmap = createBitmap(ceil(bounds.width() * scale).toInt().coerceAtLeast(1),
+            ceil(bounds.height() * scale).toInt().coerceAtLeast(1))
+        val job = currentCoroutineContext()
+        try {
+            draw(Canvas(bitmap), strokes, paper, bounds, scale, previewPaper = true, checkpoint = { job.ensureActive() })
+            job.ensureActive()
+            return bitmap
+        } catch (e: Throwable) { bitmap.recycle(); throw e }
+    }
     fun noteBounds(strokes: List<EditorStroke>): RectF = RectF(0f, 0f, Viewport.WIDTH,
         maxOf(1000f, (strokes.mapNotNull { it.bounds?.yMax }.maxOrNull() ?: 0f) + 24f))
     fun selectionBounds(strokes: List<EditorStroke>): RectF {
@@ -64,12 +78,12 @@ internal object NoteExport {
         } finally { document.close() }
     }
     private fun draw(canvas: Canvas, strokes: List<EditorStroke>, paper: NotePaper, bounds: RectF, scale: Float,
-        quality: StrokeFidelityCache? = null) {
+        quality: StrokeFidelityCache? = null, previewPaper: Boolean = false, checkpoint: () -> Unit = {}) {
         val matrix = Matrix().apply { setValues(floatArrayOf(scale, 0f, -bounds.left * scale, 0f, scale, -bounds.top * scale, 0f, 0f, 1f)) }
         canvas.withMatrix(matrix) {
-            PaperRenderer.draw(this, paper, bounds, scale)
+            PaperRenderer.draw(this, paper, bounds, if (previewPaper) 1f else scale)
             val renderer = CanvasStrokeRenderer.create()
-            strokes.forEach { stroke -> stroke.bounds?.let { b ->
+            strokes.forEach { stroke -> checkpoint(); stroke.bounds?.let { b ->
                 if (b.xMax >= bounds.left && b.xMin <= bounds.right && b.yMax >= bounds.top && b.yMin <= bounds.bottom)
                     if (stroke.image != null) EmbeddedImages.draw(this, stroke.image)
                     else renderer.draw(this, quality?.get(stroke.ink) ?: stroke.ink, matrix)

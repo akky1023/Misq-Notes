@@ -100,20 +100,20 @@ internal fun GeneralSettingsScreen(model: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     "notes" -> {
-                        var scrollbarMenu by remember { mutableStateOf(false) }
+                        var previewMenu by remember { mutableStateOf(false) }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(AppMessages.text(R.string.scrollbar_position), Modifier.weight(1f))
+                            Text(AppMessages.text(R.string.preview_position), Modifier.weight(1f))
                             Box {
-                                TextButton(onClick = { scrollbarMenu = true },
-                                    modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.scrollbar_position) }) {
-                                    Text(AppMessages.text(if (library.value.scrollbarOnLeft) R.string.scrollbar_left else R.string.scrollbar_right))
+                                TextButton(onClick = { previewMenu = true },
+                                    modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.preview_position) }) {
+                                    Text(AppMessages.text(if (library.value.previewOnRight) R.string.position_right else R.string.position_left))
                                     Icon(ToolbarIcons.Expand, null, Modifier.padding(start = 8.dp))
                                 }
-                                DropdownMenu(scrollbarMenu, { scrollbarMenu = false }) {
-                                    listOf(true to R.string.scrollbar_left, false to R.string.scrollbar_right).forEach { (left, label) ->
+                                DropdownMenu(previewMenu, { previewMenu = false }) {
+                                    listOf(false to R.string.position_left, true to R.string.position_right).forEach { (right, label) ->
                                         DropdownMenuItem({ Text(AppMessages.text(label)) }, {
-                                            scrollbarMenu = false
-                                            model.scrollbarOnLeft(left)
+                                            previewMenu = false
+                                            model.previewOnRight(right)
                                         })
                                     }
                                 }

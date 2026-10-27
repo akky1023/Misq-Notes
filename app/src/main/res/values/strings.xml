@@ -209,9 +209,8 @@
     <string name="restore_default" formatted="false">"デフォルトに戻す"</string>
     <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。指定した保存先に、用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
-    <string name="scrollbar_position">スクロールバーの位置</string>
-    <string name="scrollbar_left">左</string>
-    <string name="scrollbar_right">右</string>
+    <string name="position_left">左</string>
+    <string name="position_right">右</string>
     <string name="stroke_cache">筆跡キャッシュ</string>
     <string name="stroke_cache_limited">128本まで（省メモリ）</string>
     <string name="stroke_cache_visible">画面内すべて</string>
@@ -233,4 +232,7 @@
     <string name="import_cancel">キャンセル</string>
     <string name="pinch_resize_media">選択したメディアをピンチで拡大縮小</string>
     <string name="lasso_include_media">lassoの選択にメディアを含める</string>
+    <string name="note_preview">ノート全体のプレビュー</string>
+    <string name="preview_position">プレビューの表示位置</string>
+    <string name="preview_retry">プレビューを再読み込み</string>
 </resources>

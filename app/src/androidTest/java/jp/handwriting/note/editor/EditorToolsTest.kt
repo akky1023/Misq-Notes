@@ -20,7 +20,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class EditorToolsTest {
-    @Test fun fastScrollMovesZoomedNoteWithoutDrawingAndCancelRestoresPosition() = runBlocking {
+    @Test fun canvasEdgesUseOrdinaryFingerPanningWithoutDrawing() = runBlocking {
         withModel { model ->
             withContext(Dispatchers.Main) {
                 val target = InstrumentationRegistry.getInstrumentation().targetContext
@@ -29,39 +29,39 @@ class EditorToolsTest {
                 val context = target.createDisplayContext(display)
                 val density = context.resources.displayMetrics.density
                 val canvas = InkCanvasView(context, model)
+                assertFalse(canvas.isVerticalScrollBarEnabled)
+                assertFalse(canvas.isHorizontalScrollBarEnabled)
                 val width = (600 * density).toInt()
                 val height = (800 * density).toInt()
                 canvas.layout(0, 0, width, height)
-                model.viewport.restore(ViewPosition(2f, 100f, 0f))
+                model.viewport.restore(ViewPosition(2f, 100f, 500f))
                 model.edits.restore(listOf(OrderedEdits.Entry(1L, stroke(100f, 10000f))))
                 val initial = model.viewport.position
                 val count = model.edits.snapshot().size
-                val geometry = FastScroll.create(model.viewport, model.contentBottom, density)!!
-                fun touch(action: Int, y: Float, tool: Int) {
-                    val properties = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = tool }
+                fun touch(action: Int, x: Float, y: Float) {
+                    val properties = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }
                     val coordinates = android.view.MotionEvent.PointerCoords().apply {
-                        x = if (model.library.value.value.scrollbarOnLeft) 8 * density else width - 8 * density
+                        this.x = x
                         this.y = y; pressure = 1f
                     }
                     val event = android.view.MotionEvent.obtain(0L, 10L, action, 1, arrayOf(properties), arrayOf(coordinates),
                         0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
                     try { assertTrue(canvas.onTouchEvent(event)) } finally { event.recycle() }
                 }
-                val finger = android.view.MotionEvent.TOOL_TYPE_FINGER
-                val pen = android.view.MotionEvent.TOOL_TYPE_STYLUS
                 for (left in listOf(false, true)) {
-                    model.scrollbarOnLeft(left)
                     model.viewport.restore(initial)
-                    touch(android.view.MotionEvent.ACTION_DOWN, geometry.start + 20 * density, finger)
-                    touch(android.view.MotionEvent.ACTION_MOVE, geometry.end, finger)
-                    assertEquals(geometry.maxTop, model.viewport.position.top, 0.1f)
-                    touch(android.view.MotionEvent.ACTION_CANCEL, geometry.end, finger)
+                    val x = if (left) 8 * density else width - 8 * density
+                    touch(android.view.MotionEvent.ACTION_DOWN, x, 100 * density)
+                    touch(android.view.MotionEvent.ACTION_MOVE, x, 200 * density)
+                    assertTrue(model.viewport.position.top < initial.top)
+                    touch(android.view.MotionEvent.ACTION_CANCEL, x, 200 * density)
                     assertEquals(initial, model.viewport.position)
-                    touch(android.view.MotionEvent.ACTION_DOWN, geometry.start + 20 * density, pen)
-                    touch(android.view.MotionEvent.ACTION_UP, geometry.end, pen)
-                    assertEquals(geometry.maxTop, model.viewport.position.top, 0.1f)
+                    touch(android.view.MotionEvent.ACTION_DOWN, x, 100 * density)
+                    touch(android.view.MotionEvent.ACTION_MOVE, x, 200 * density)
+                    touch(android.view.MotionEvent.ACTION_UP, x, 200 * density)
+                    assertTrue(model.viewport.position.top < initial.top)
                     assertEquals(initial.zoom, model.viewport.position.zoom, 0f)
-                    assertEquals(initial.left, model.viewport.position.left, 0f)
+                    assertEquals(initial.left, model.viewport.position.left, 0.01f)
                     assertEquals(count, model.edits.snapshot().size)
                 }
                 canvas.settleForPause()

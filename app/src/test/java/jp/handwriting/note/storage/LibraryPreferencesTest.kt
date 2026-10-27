@@ -8,15 +8,35 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class LibraryPreferencesTest {
-    @Test fun scrollbarSideSurvivesRestartAndOlderSettingsDefaultToRight() {
+    @Test fun previewSideSurvivesRestartAndVersionTenDefaultsToLeft() {
         val file = File(temp.newFolder(), "library.hwp")
-        assertFalse(LibraryPreferencesFile(file).read().scrollbarOnLeft)
-        for (left in listOf(false, true)) {
-            val value = LibraryPreferences(scrollbarOnLeft = left)
+        assertFalse(LibraryPreferencesFile(file).read().previewOnRight)
+        for (right in listOf(false, true)) {
+            val value = LibraryPreferences(previewOnRight = right)
             LibraryPreferencesFile(file).write(value)
             assertEquals(value, LibraryPreferencesFile(file).read())
         }
         val old = NoteFiles.readEnvelope(file).dropLast(1).toByteArray()
+        java.nio.ByteBuffer.wrap(old).putInt(10)
+        NoteFiles.atomicWrite(file, old)
+        assertEquals(LibraryPreferences(), LibraryPreferencesFile(file).read())
+    }
+    @Test fun removedScrollbarSideIsIgnoredWithoutLosingPreviewSide() {
+        val file = File(temp.newFolder(), "library.hwp")
+        val value = LibraryPreferences(previewOnRight = true)
+        for (left in listOf(false, true)) {
+            LibraryPreferencesFile(file).write(value)
+            val bytes = NoteFiles.readEnvelope(file)
+            bytes[bytes.lastIndex - 1] = if (left) 1 else 0
+            NoteFiles.atomicWrite(file, bytes)
+            assertEquals(value, LibraryPreferencesFile(file).read())
+            val versionTen = bytes.dropLast(1).toByteArray()
+            java.nio.ByteBuffer.wrap(versionTen).putInt(10)
+            NoteFiles.atomicWrite(file, versionTen)
+            assertEquals(LibraryPreferences(), LibraryPreferencesFile(file).read())
+        }
+        LibraryPreferencesFile(file).write(value)
+        val old = NoteFiles.readEnvelope(file).dropLast(2).toByteArray()
         java.nio.ByteBuffer.wrap(old).putInt(9)
         NoteFiles.atomicWrite(file, old)
         assertEquals(LibraryPreferences(), LibraryPreferencesFile(file).read())
@@ -27,7 +47,7 @@ class LibraryPreferencesTest {
         val current = LibraryPreferences(theme = AppThemeMode.DARK, amoled = true)
         LibraryPreferencesFile(file).write(current)
         assertEquals(current, LibraryPreferencesFile(file).read())
-        val currentBytes = NoteFiles.readEnvelope(file).dropLast(17).toByteArray()
+        val currentBytes = NoteFiles.readEnvelope(file).dropLast(18).toByteArray()
         for (oldChoice in listOf(0, 1)) {
             val versionSix = (currentBytes + byteArrayOf(oldChoice.toByte())).also { java.nio.ByteBuffer.wrap(it).putInt(6) }
             NoteFiles.atomicWrite(file, versionSix)
@@ -41,7 +61,7 @@ class LibraryPreferencesTest {
             LibraryPreferencesFile(file).write(value)
             assertEquals(value, LibraryPreferencesFile(file).read())
         }
-        val old = NoteFiles.readEnvelope(file).dropLast(17).toByteArray()
+        val old = NoteFiles.readEnvelope(file).dropLast(18).toByteArray()
         java.nio.ByteBuffer.wrap(old).putInt(7)
         NoteFiles.atomicWrite(file, old)
         assertEquals(jp.handwriting.note.editor.StrokeCacheMode.NEARBY, LibraryPreferencesFile(file).read().strokeCache)
@@ -213,7 +233,7 @@ class LibraryPreferencesTest {
         val value = LibraryPreferences(paper = NotePaper(pattern = PaperPattern.GRID),
             strokeCache = jp.handwriting.note.editor.StrokeCacheMode.entries.last())
         LibraryPreferencesFile(file).write(value)
-        val bytes = NoteFiles.readEnvelope(file).dropLast(13).toByteArray()
+        val bytes = NoteFiles.readEnvelope(file).dropLast(14).toByteArray()
         java.nio.ByteBuffer.wrap(bytes).putInt(8)
         NoteFiles.atomicWrite(file, bytes)
         assertEquals(value, LibraryPreferencesFile(file).read())
