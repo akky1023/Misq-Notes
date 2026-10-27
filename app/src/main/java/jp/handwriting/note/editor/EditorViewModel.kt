@@ -520,6 +520,11 @@ class EditorViewModel : ViewModel() {
     internal fun suppressPenGestures(enabled: Boolean) = updateLibrary(mutableLibrary.value.value.copy(suppressPenGestures = enabled))
     internal fun listGrid(grid: Boolean) = updateLibrary(mutableLibrary.value.value.copy(grid = grid))
     internal fun previewOnRight(right: Boolean) = updateLibrary(mutableLibrary.value.value.copy(previewOnRight = right))
+    internal fun previewLayout(widthDp: Float, position: Float) {
+        val before = mutableLibrary.value.value
+        val after = before.copy(previewWidthDp = widthDp, previewHandlePosition = position)
+        if (after != before) updateLibrary(after)
+    }
     internal fun strokeCache(mode: StrokeCacheMode) {
         updateLibrary(mutableLibrary.value.value.copy(strokeCache = mode))
         onCanvasChange?.invoke()

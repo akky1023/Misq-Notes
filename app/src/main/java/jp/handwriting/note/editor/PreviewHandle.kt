@@ -30,11 +30,12 @@ import kotlin.math.abs
 @Composable
 internal fun PreviewHandle(visible: Boolean, onRight: Boolean, openProgress: Float, onToggle: () -> Unit,
     onSwipeStart: () -> Unit, onSwipe: (Float) -> Unit, onSwipeEnd: (Boolean?) -> Unit,
-    onResize: (Float) -> Unit, onMove: (Float) -> Unit, modifier: Modifier = Modifier) {
+    onResize: (Float) -> Unit, onMove: (Float) -> Unit, onAdjustmentEnd: () -> Unit, modifier: Modifier = Modifier) {
     var adjusting by remember { mutableStateOf(false) }
     val toggle by rememberUpdatedState(onToggle)
     val resize by rememberUpdatedState(onResize)
     val move by rememberUpdatedState(onMove)
+    val finishAdjustment by rememberUpdatedState(onAdjustmentEnd)
     val startSwipe by rememberUpdatedState(onSwipeStart)
     val swipe by rememberUpdatedState(onSwipe)
     val finishSwipe by rememberUpdatedState(onSwipeEnd)
@@ -118,6 +119,7 @@ internal fun PreviewHandle(visible: Boolean, onRight: Boolean, openProgress: Flo
                 }
             } finally {
                 adjusting = false
+                if (held) finishAdjustment()
                 if (swiping) finishSwipe(null)
             }
         }

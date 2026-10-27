@@ -50,8 +50,8 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     var paperDialog by rememberSaveable { mutableStateOf(false) }
     var optionsDialog by rememberSaveable { mutableStateOf(false) }
     var previewVisible by rememberSaveable(workspace.current?.id) { mutableStateOf(false) }
-    var preferredPreviewWidth by rememberSaveable { mutableStateOf<Float?>(null) }
-    var previewHandlePosition by rememberSaveable { mutableFloatStateOf(0.5f) }
+    var preferredPreviewWidth by rememberSaveable(library.value.previewWidthDp) { mutableFloatStateOf(library.value.previewWidthDp) }
+    var previewHandlePosition by rememberSaveable(library.value.previewHandlePosition) { mutableFloatStateOf(library.value.previewHandlePosition) }
     var previewSwipeFraction by remember(workspace.current?.id, library.value.previewOnRight) { mutableStateOf<Float?>(null) }
     val animatedPreviewFraction by animateFloatAsState(previewSwipeFraction ?: if (previewVisible) 1f else 0f,
         if (previewSwipeFraction != null) snap() else tween(220), label = "notePreviewVisibility")
@@ -86,7 +86,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                 val density = LocalDensity.current
                 val minimumPreviewWidth = minOf(80.dp, maxWidth * 0.25f)
                 val maximumPreviewWidth = maxOf(minimumPreviewWidth, minOf(maxWidth * 0.65f, maxWidth - 200.dp))
-                val fullPreviewWidth = (preferredPreviewWidth?.dp ?: (maxWidth * 0.22f).coerceAtMost(200.dp))
+                val fullPreviewWidth = (preferredPreviewWidth.takeIf { it > 0f }?.dp ?: (maxWidth * 0.22f).coerceAtMost(200.dp))
                     .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
                 val previewWidth = fullPreviewWidth * previewFraction
                 Box(Modifier.fillMaxSize().padding(
@@ -182,6 +182,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                 val handleTravel = (maxHeight - 80.dp).coerceAtLeast(0.dp)
                 PreviewHandle(visible = previewVisible, onRight = library.value.previewOnRight, openProgress = previewFraction,
                     onToggle = { previewVisible = !previewVisible },
+                    onAdjustmentEnd = { model.previewLayout(preferredPreviewWidth, previewHandlePosition) },
                     onSwipeStart = { previewSwipeFraction = previewFraction },
                     onSwipe = { delta ->
                         val width = with(density) { fullPreviewWidth.toPx() }
@@ -192,7 +193,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         previewSwipeFraction = null
                     },
                     onResize = { delta ->
-                        val width = (preferredPreviewWidth?.dp ?: fullPreviewWidth)
+                        val width = (preferredPreviewWidth.takeIf { it > 0f }?.dp ?: fullPreviewWidth)
                             .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
                         preferredPreviewWidth = (width.value + with(density) { delta.toDp().value })
                             .coerceIn(minimumPreviewWidth.value, maximumPreviewWidth.value)
