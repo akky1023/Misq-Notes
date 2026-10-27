@@ -235,4 +235,9 @@
     <string name="note_preview">ノート全体のプレビュー</string>
     <string name="preview_position">プレビューの表示位置</string>
     <string name="preview_retry">プレビューを再読み込み</string>
+    <string name="preview_tab_all">全体</string>
+    <string name="preview_tab_stars">星の行</string>
+    <string name="preview_star_rows">星の行のプレビュー</string>
+    <string name="preview_star_row">星の行 %1$s</string>
+    <string name="preview_no_stars">星のある行はありません</string>
 </resources>

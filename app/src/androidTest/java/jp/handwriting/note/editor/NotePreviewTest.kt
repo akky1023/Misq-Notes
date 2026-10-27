@@ -40,6 +40,30 @@ class NotePreviewTest {
         return EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), color, 30f, 0.1f), input))
     }
 
+    @Test fun previewEnlargesOnlyTheRequestedStrokeWithoutChangingSavedInk() = runBlocking {
+        val red = line(250f, 0xFFFF0000.toInt())
+        val blue = line(750f, 0xFF0000FF.toInt())
+        val before = jp.handwriting.note.storage.NoteRepository.encodeStroke(red)
+        val strokes = listOf(red, blue)
+        val normal = NoteExport.preview(strokes, NotePaper(color = 0xFFFFFFFF.toInt()))
+        val enlarged = NoteExport.preview(strokes, NotePaper(color = 0xFFFFFFFF.toInt()), enlargedStrokes = setOf(red.storageId))
+        try {
+            fun pixels(bitmap: Bitmap, red: Boolean): Int {
+                var count = 0
+                for (y in 0 until bitmap.height) for (x in 0 until bitmap.width) {
+                    val color = bitmap.getPixel(x, y)
+                    if (android.graphics.Color.green(color) < 80 &&
+                        (if (red) android.graphics.Color.red(color) > 180 && android.graphics.Color.blue(color) < 80
+                         else android.graphics.Color.blue(color) > 180 && android.graphics.Color.red(color) < 80)) count++
+                }
+                return count
+            }
+            assertTrue(pixels(enlarged, true) > pixels(normal, true) * 1.3f)
+            assertEquals(pixels(normal, false), pixels(enlarged, false))
+            assertArrayEquals(before, jp.handwriting.note.storage.NoteRepository.encodeStroke(red))
+        } finally { normal.recycle(); enlarged.recycle() }
+    }
+
     @Test fun fullPreviewIncludesDistantInkAndBoundsAllocationForVeryLongNotes() = runBlocking {
         val source = Bitmap.createBitmap(8, 8, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF00FF00.toInt()) }
         val png = java.io.ByteArrayOutputStream()

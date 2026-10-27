@@ -12,7 +12,9 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
         fun discard() = node.discardDisplayList()
     }
     private data class Group(val nodes: List<RecordedNode>, val items: List<Item>, val offset: WorldPoint, val tail: List<Item> = emptyList(), val scale: Float = 1f)
-    private val groups = mutableMapOf<Long, Group>()
+    private data class GroupId(val bucket: Long, val separator: Long = 0L, val star: Boolean = false)
+    private val groups = mutableMapOf<GroupId, Group>()
+    private var visibleGroups = emptySet<GroupId>()
     private var viewport: ViewPosition? = null
     private var width = 0
     private var height = 0
@@ -23,12 +25,13 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     fun clear() {
         groups.values.forEach { group -> group.nodes.forEach { it.discard() } }
         groups.clear()
+        visibleGroups = emptySet()
     }
 
     fun draw(canvas: Canvas, entries: List<Pair<Long, EditorStroke>>, position: ViewPosition,
         viewWidth: Int, viewHeight: Int, selectionOffset: WorldPoint,
         selected: (EditorStroke) -> Boolean, compact: Boolean = false, retainedStrokes: Set<EditorStroke>? = null,
-        selectionScale: Float = 1f, drawStroke: (Canvas, EditorStroke, Boolean) -> Unit) {
+        selectionScale: Float = 1f, starIds: Set<Long> = emptySet(), drawStroke: (Canvas, EditorStroke, Boolean) -> Unit) {
         // Bitmap exports and previews continue to use Ink's software renderer.
         if (!canvas.isHardwareAccelerated) {
             entries.forEach { drawStroke(canvas, it.second, selected(it.second)) }
@@ -38,12 +41,22 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             clear(); viewport = position; width = viewWidth; height = viewHeight
         }
         // Operation IDs are stable under erase/undo; deleting a stroke never shifts later groups.
-        val visible = entries.groupBy { it.first / GROUP_SIZE }
+        // Stars have individual display lists. Split surrounding normal strokes into stable runs
+        // so rebuilding a returning star neither redraws its neighbours nor changes draw order.
+        val sortedStars = java.util.TreeSet(starIds)
+        val visible = linkedMapOf<GroupId, MutableList<Pair<Long, EditorStroke>>>()
+        entries.forEach { entry ->
+            val bucket = entry.first / GROUP_SIZE
+            val star = entry.first in starIds
+            val preceding = sortedStars.floor(entry.first)?.takeIf { it / GROUP_SIZE == bucket } ?: 0L
+            val id = GroupId(bucket, if (star) entry.first else preceding, star)
+            visible.getOrPut(id) { mutableListOf() }.add(entry)
+        }
         val unused = groups.keys.filter { id -> id !in visible &&
             (retainedStrokes == null || groups.getValue(id).items.none { it.stroke in retainedStrokes }) }
         unused.forEach { groups.remove(it)?.nodes?.forEach(RecordedNode::discard) }
         var compacted = false
-        fun record(id: Long, items: List<Item>, reuse: RecordedNode? = null): RecordedNode {
+        fun record(id: GroupId, items: List<Item>, reuse: RecordedNode? = null): RecordedNode {
             val node = reuse?.node ?: RenderNode("note-strokes-$id")
             // A stroke crossing the screen edge must remain complete when panned into view.
             node.setClipToBounds(false)
@@ -59,6 +72,12 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             val offset = if (items.any { it.selected }) selectionOffset else WorldPoint(0f, 0f)
             val factor = if (items.any { it.selected }) selectionScale else 1f
             var group = groups[id]
+            // Only stars get the re-entry workaround. Ordinary retained lists stay reusable.
+            if (group != null && ((id.star && id !in visibleGroups) || group.nodes.any { !it.node.hasDisplayList() })) {
+                group.nodes.forEach(RecordedNode::discard)
+                groups.remove(id)
+                group = null
+            }
             if (group == null || group.items != items || group.offset != offset || group.scale != factor) {
                 if (group != null && appendLimit < GROUP_SIZE && group.offset == offset && group.scale == factor && items.size > group.items.size &&
                     group.items.indices.all { group.items[it] == items[it] }) {
@@ -89,5 +108,6 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
                 canvas.restore()
             }
         }
+        visibleGroups = visible.keys.toSet()
     }
 }
