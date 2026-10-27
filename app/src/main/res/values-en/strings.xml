@@ -236,6 +236,7 @@
     <string name="preview_position">Preview position</string>
     <string name="preview_retry">Reload preview</string>
     <string name="preview_star_filter">Show only star rows</string>
+    <string name="preview_resize">Resize preview width</string>
     <string name="preview_star_rows">Preview of rows with stars</string>
     <string name="preview_star_row">Star row %1$s</string>
     <string name="preview_no_stars">No rows with stars</string>

@@ -12,6 +12,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -24,10 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,6 +55,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     var paperDialog by rememberSaveable { mutableStateOf(false) }
     var optionsDialog by rememberSaveable { mutableStateOf(false) }
     var previewVisible by rememberSaveable(workspace.current?.id) { mutableStateOf(false) }
+    var preferredPreviewWidth by rememberSaveable { mutableStateOf<Float?>(null) }
     val previewFraction by animateFloatAsState(if (previewVisible) 1f else 0f, tween(220), label = "notePreviewVisibility")
     var optionsAnchor by remember { mutableStateOf<IntRect?>(null) }
     var toolbarDock by remember { mutableStateOf(ToolbarDock(0.5f, 0f, DockEdge.TOP)) }
@@ -76,7 +84,11 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
         val importDocument = rememberDocumentImporter(model)
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-                val fullPreviewWidth = (maxWidth * 0.22f).coerceAtMost(200.dp)
+                val density = LocalDensity.current
+                val minimumPreviewWidth = minOf(80.dp, maxWidth * 0.25f)
+                val maximumPreviewWidth = maxOf(minimumPreviewWidth, minOf(maxWidth * 0.65f, maxWidth - 200.dp))
+                val fullPreviewWidth = (preferredPreviewWidth?.dp ?: (maxWidth * 0.22f).coerceAtMost(200.dp))
+                    .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
                 val previewWidth = fullPreviewWidth * previewFraction
                 Box(Modifier.fillMaxSize().padding(
                     start = if (library.value.previewOnRight) 0.dp else previewWidth,
@@ -149,14 +161,16 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         .wrapContentWidth(if (library.value.previewOnRight) Alignment.Start else Alignment.End, unbounded = true)
                         .requiredWidth(fullPreviewWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainer) {
                         Box {
-                            NotePreview(model, Modifier.fillMaxSize().padding(top = 72.dp, start = 8.dp, end = 8.dp, bottom = 16.dp),
+                            NotePreview(model, Modifier.fillMaxSize(),
                                 onRight = library.value.previewOnRight)
                             VerticalDivider(Modifier.align(if (library.value.previewOnRight) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight())
                         }
                     }
                     }
                 }
-                Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
+                Surface(Modifier.align(Alignment.TopStart)
+                    .padding(start = if (library.value.previewOnRight) 0.dp else previewWidth)
+                    .padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onNotes, modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.back_to_notes) }) {
                             Icon(ToolbarIcons.Back, null)
@@ -167,6 +181,39 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         IconToggleButton(checked = previewVisible, onCheckedChange = { previewVisible = it },
                             modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.note_preview) }) {
                             Icon(ToolbarIcons.Preview, null)
+                        }
+                    }
+                }
+                if (previewVisible) {
+                    val resizePreview: (Float) -> Unit = { width ->
+                        preferredPreviewWidth = width.coerceIn(minimumPreviewWidth.value, maximumPreviewWidth.value)
+                    }
+                    val dragState = rememberDraggableState { delta ->
+                        val width = (preferredPreviewWidth?.dp ?: fullPreviewWidth)
+                            .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
+                        resizePreview(width.value + with(density) { delta.toDp().value })
+                    }
+                    Box(Modifier.align(Alignment.CenterStart)
+                        .offset(x = (if (library.value.previewOnRight) maxWidth - previewWidth else previewWidth) - 12.dp)
+                        .size(width = 24.dp, height = 80.dp)
+                        .semantics {
+                            contentDescription = AppMessages.text(R.string.preview_resize)
+                            progressBarRangeInfo = ProgressBarRangeInfo(fullPreviewWidth.value,
+                                minimumPreviewWidth.value..maximumPreviewWidth.value)
+                            setProgress { resizePreview(it); true }
+                        }
+                        .draggable(state = dragState, orientation = Orientation.Horizontal,
+                            enabled = previewFraction == 1f, reverseDirection = library.value.previewOnRight),
+                        contentAlignment = Alignment.Center) {
+                        Surface(Modifier.size(width = 12.dp, height = 56.dp), shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest, shadowElevation = 3.dp) {
+                            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                repeat(2) {
+                                    Surface(Modifier.size(width = 2.dp, height = 24.dp), shape = RoundedCornerShape(1.dp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant) {}
+                                }
+                            }
                         }
                     }
                 }

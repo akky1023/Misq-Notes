@@ -135,7 +135,7 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
             Text(AppMessages.text(R.string.preview_no_stars), style = MaterialTheme.typography.bodySmall)
         }
     } else LazyColumn(modifier.semantics { contentDescription = AppMessages.text(R.string.preview_star_rows) },
-        state = state, contentPadding = PaddingValues(bottom = 80.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        state = state, contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(document.rows.size) { index ->
             val row = document.rows[index]
             Box(Modifier.fillMaxWidth().semantics {
@@ -145,7 +145,7 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
                 model.moveViewportFromPreview(visibleRegion.left, ((row.top + row.bottom - height) / 2f).coerceAtLeast(0f))
                 model.viewportChanged()
             }) {
-                PreviewBand(document, row.top, row.bottom, visibleRegion)
+                PreviewBand(document, row.top, row.bottom, visibleRegion, showViewport = false)
             }
         }
     }
@@ -221,7 +221,8 @@ private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?,
 }
 
 @Composable
-private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, visibleRegion: StrokeIndex.Bounds) {
+private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, visibleRegion: StrokeIndex.Bounds,
+    showViewport: Boolean = true) {
     val frameColor = MaterialTheme.colorScheme.primary
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
@@ -240,7 +241,7 @@ private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, vi
         Box(Modifier.drawWithContent {
             drawContent()
             val scale = size.width / Viewport.WIDTH
-            if (visibleRegion.bottom > top && visibleRegion.top < bottom) {
+            if (showViewport && visibleRegion.bottom > top && visibleRegion.top < bottom) {
                 val inset = 1.5.dp.toPx()
                 val origin = Offset(visibleRegion.left * scale + inset, (visibleRegion.top - top) * scale + inset)
                 val area = Size(((visibleRegion.right - visibleRegion.left) * scale - 2f * inset).coerceAtLeast(0f),

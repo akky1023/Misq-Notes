@@ -236,6 +236,7 @@
     <string name="preview_position">プレビューの表示位置</string>
     <string name="preview_retry">プレビューを再読み込み</string>
     <string name="preview_star_filter">星の行のみ表示</string>
+    <string name="preview_resize">プレビューの横幅を変更</string>
     <string name="preview_star_rows">星の行のプレビュー</string>
     <string name="preview_star_row">星の行 %1$s</string>
     <string name="preview_no_stars">星のある行はありません</string>
