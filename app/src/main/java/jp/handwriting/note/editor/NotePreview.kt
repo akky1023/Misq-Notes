@@ -189,6 +189,7 @@ private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?,
 
 @Composable
 private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, visibleRegion: StrokeIndex.Bounds) {
+    val frameColor = MaterialTheme.colorScheme.primary
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
@@ -212,9 +213,9 @@ private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, vi
                 val area = Size(((visibleRegion.right - visibleRegion.left) * scale - 2f * inset).coerceAtLeast(0f),
                     ((visibleRegion.bottom - visibleRegion.top) * scale - 2f * inset).coerceAtLeast(0f))
                 clipRect {
-                    drawRect(Color(0xFFFF9800).copy(alpha = 0.08f), origin, area)
+                    drawRect(frameColor.copy(alpha = 0.08f), origin, area)
                     drawRect(Color.White, origin, area, style = Stroke(3.dp.toPx()))
-                    drawRect(Color(0xFFFF9800), origin, area, style = Stroke(1.5.dp.toPx()))
+                    drawRect(frameColor, origin, area, style = Stroke(1.5.dp.toPx()))
                 }
             }
         }, contentAlignment = Alignment.Center) {

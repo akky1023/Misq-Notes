@@ -22,6 +22,7 @@ import jp.handwriting.note.NotebookTheme
 import androidx.compose.material3.Surface
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
 import jp.handwriting.note.R
 import jp.handwriting.note.storage.NotePaper
 import jp.handwriting.note.storage.ImageData
@@ -98,6 +99,13 @@ class NotePreviewTest {
         }
         try {
             withTimeout(15000) { model.workspace.first { !it.working } }
+            val settings = model.library.value.value
+            val systemDark = instrumentation.targetContext.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val frameColor = jp.handwriting.note.notebookColors(settings.theme, systemDark, settings.amoled).primary.toArgb()
+            fun isFramePixel(pixel: Int) = kotlin.math.abs(android.graphics.Color.red(pixel) - android.graphics.Color.red(frameColor)) < 20 &&
+                kotlin.math.abs(android.graphics.Color.green(pixel) - android.graphics.Color.green(frameColor)) < 20 &&
+                kotlin.math.abs(android.graphics.Color.blue(pixel) - android.graphics.Color.blue(frameColor)) < 20
             withContext(Dispatchers.Main) { model.createNote("Preview test") }
             withTimeout(15000) { model.workspace.first { it.current != null && !it.working } }
             withContext(Dispatchers.Main) {
@@ -204,7 +212,7 @@ class NotePreviewTest {
                                 val frame = Rect(Int.MAX_VALUE, Int.MAX_VALUE, 0, 0)
                                 for (y in left.top until minOf(left.bottom, shot.height)) for (x in left.left until left.right) {
                                     val pixel = shot.getPixel(x, y)
-                                    if (android.graphics.Color.red(pixel) > 240 && android.graphics.Color.green(pixel) in 110..190 && android.graphics.Color.blue(pixel) < 50) {
+                                    if (isFramePixel(pixel)) {
                                         frame.left = minOf(frame.left, x); frame.right = maxOf(frame.right, x)
                                         frame.top = minOf(frame.top, y); frame.bottom = maxOf(frame.bottom, y)
                                     }
@@ -248,16 +256,16 @@ class NotePreviewTest {
                 do {
                     automation.takeScreenshot()?.let { shot ->
                         try {
-                            var orangeVisible = false
+                            var frameVisible = false
                             var topStrokeVisible = false
                             for (y in left.top until minOf(left.bottom, shot.height)) {
                                 val x = left.left + (model.visibleRegion.value.left * previewScale).toInt() + 4
                                 val pixel = shot.getPixel(x, y)
-                                if (android.graphics.Color.red(pixel) > 240 && android.graphics.Color.green(pixel) in 110..190 && android.graphics.Color.blue(pixel) < 50) orangeVisible = true
+                                if (isFramePixel(pixel)) frameVisible = true
                                 val centerPixel = shot.getPixel(left.centerX(), y)
                                 if (android.graphics.Color.red(centerPixel) > 240 && android.graphics.Color.green(centerPixel) < 50 && android.graphics.Color.blue(centerPixel) < 50) topStrokeVisible = true
                             }
-                            followed = orangeVisible && !topStrokeVisible
+                            followed = frameVisible && !topStrokeVisible
                             if (followed) File(instrumentation.targetContext.cacheDir, "codex-preview-follow.png").outputStream().use {
                                 shot.compress(Bitmap.CompressFormat.PNG, 100, it)
                             }
