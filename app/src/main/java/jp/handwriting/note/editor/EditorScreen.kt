@@ -149,7 +149,8 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         .wrapContentWidth(if (library.value.previewOnRight) Alignment.Start else Alignment.End, unbounded = true)
                         .requiredWidth(fullPreviewWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainer) {
                         Box {
-                            NotePreview(model, Modifier.fillMaxSize().padding(top = 72.dp, start = 8.dp, end = 8.dp, bottom = 16.dp))
+                            NotePreview(model, Modifier.fillMaxSize().padding(top = 72.dp, start = 8.dp, end = 8.dp, bottom = 16.dp),
+                                onRight = library.value.previewOnRight)
                             VerticalDivider(Modifier.align(if (library.value.previewOnRight) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight())
                         }
                     }
