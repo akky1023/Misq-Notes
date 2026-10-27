@@ -124,6 +124,54 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var fingerFocusX = 0f
     private var fingerFocusY = 0f
     private var fingerSpan = 0f
+    private data class FastScrollDrag(val geometry: FastScroll, val initial: ViewPosition,
+        val pointer: Int, val device: Int, val grabOffset: Float)
+    private var fastScrollDrag: FastScrollDrag? = null
+    private val fastScrollPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val fastScrollBounds = RectF()
+    private fun fastScrollGeometry() = fastScrollDrag?.geometry
+        ?: FastScroll.create(model.viewport, model.contentBottom, resources.displayMetrics.density)
+
+    private fun fastScrollEvent(event: MotionEvent): Boolean {
+        val drag = fastScrollDrag
+        if (drag != null) {
+            if (event.deviceId != drag.device) return true
+            val index = event.findPointerIndex(drag.pointer)
+            when {
+                event.actionMasked == MotionEvent.ACTION_CANCEL || index < 0 -> finishFastScroll(canceled = true)
+                event.actionMasked == MotionEvent.ACTION_MOVE || event.actionMasked == MotionEvent.ACTION_UP -> {
+                    model.viewport.restore(drag.initial.copy(top = drag.geometry.scrollTop(event.getY(index) - drag.grabOffset)))
+                    updateTransforms(); completed.invalidate()
+                    if (event.actionMasked == MotionEvent.ACTION_UP) { finishFastScroll(); performClick() }
+                }
+                event.actionMasked == MotionEvent.ACTION_POINTER_UP && event.getPointerId(event.actionIndex) == drag.pointer -> finishFastScroll()
+            }
+            return true
+        }
+        if (event.actionMasked != MotionEvent.ACTION_DOWN || pointerId != null || fingerStart != null ||
+            model.ui.value.busy || model.selectionComputing || model.penButton.held || spaceInsertionY != null) return false
+        val tool = event.getToolType(0)
+        if (tool == MotionEvent.TOOL_TYPE_FINGER && stylusNear) return false
+        if (tool !in arrayOf(MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) return false
+        val geometry = fastScrollGeometry() ?: return false
+        val density = resources.displayMetrics.density
+        val top = geometry.thumbTop(model.viewport.position.top)
+        val hitsEdge = if (model.library.value.value.scrollbarOnLeft) event.x <= 32f * density else event.x >= width - 32f * density
+        if (!hitsEdge || event.y < top - 8f * density || event.y > top + geometry.thumbSize + 8f * density) return false
+        cancelLongPress()
+        canvasMenu?.dismiss()
+        fastScrollDrag = FastScrollDrag(geometry, model.viewport.position, event.getPointerId(0), event.deviceId, event.y - top)
+        invalidate()
+        return true
+    }
+
+    private fun finishFastScroll(canceled: Boolean = false) {
+        val drag = fastScrollDrag ?: return
+        fastScrollDrag = null
+        if (canceled) model.viewport.restore(drag.initial)
+        updateTransforms(); completed.invalidate()
+        if (!canceled && model.viewport.position != drag.initial) model.viewportChanged()
+    }
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
     private var longPressPoint: WorldPoint? = null
     private var longPressWorldY = 0f
@@ -310,7 +358,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         addView(ink, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         // Allocate Ink's rendering resources before the first actual pen contact.
         ink.eagerInit()
-        isVerticalScrollBarEnabled = true
+        isVerticalScrollBarEnabled = false // The draggable thumb is drawn above the ink layers.
         isHorizontalScrollBarEnabled = true
         // Enabling flags creates no drawable on a programmatically constructed View.
         // Set both thumbs before keeping the scrollbars permanently visible.
@@ -372,6 +420,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     override fun onTouchEvent(event: MotionEvent): Boolean {
         parent?.requestDisallowInterceptTouchEvent(true)
         if (finishSpaceBeforeTouch(event, localCoordinates = true) { onTouchEvent(it) }) return true
+        if (fastScrollEvent(event)) return true
         if (event.actionMasked == MotionEvent.ACTION_CANCEL && activeDevice == event.deviceId) {
             cancelGesture(); return true
         }
@@ -510,6 +559,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         postInvalidateOnAnimation()
     }
     fun cancelGesture(dismissMenu: Boolean = true) {
+        finishFastScroll(canceled = true)
         cancelLongPress()
         spaceExitTouches?.forEach { it.event.recycle() }
         spaceExitTouches?.clear()
@@ -599,6 +649,22 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             val r = eraseRadius * scale
             val sx = model.viewport.screenX(x); val sy = model.viewport.screenY(y)
             canvas.drawCircle(sx, sy, r, cursorPaint)
+        }
+        fastScrollGeometry()?.let { geometry ->
+            val density = resources.displayMetrics.density
+            val top = geometry.thumbTop(model.viewport.position.top)
+            val active = fastScrollDrag != null
+            val thumbWidth = (if (active) 12f else 8f) * density
+            val left = if (model.library.value.value.scrollbarOnLeft) 4f * density else width - 4f * density - thumbWidth
+            fastScrollBounds.set(left, top, left + thumbWidth, top + geometry.thumbSize)
+            // A light outline keeps the handle visible on dark note paper as well.
+            fastScrollPaint.style = Paint.Style.STROKE
+            fastScrollPaint.strokeWidth = 2f * density
+            fastScrollPaint.color = Color.argb(180, 255, 255, 255)
+            canvas.drawRoundRect(fastScrollBounds, 6f * density, 6f * density, fastScrollPaint)
+            fastScrollPaint.style = Paint.Style.FILL
+            fastScrollPaint.color = if (active) Color.rgb(36, 94, 112) else Color.argb(160, 72, 86, 94)
+            canvas.drawRoundRect(fastScrollBounds, 6f * density, 6f * density, fastScrollPaint)
         }
     }
     override fun performClick(): Boolean { super.performClick(); return true }

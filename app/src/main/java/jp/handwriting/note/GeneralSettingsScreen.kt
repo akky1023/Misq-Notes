@@ -100,6 +100,26 @@ internal fun GeneralSettingsScreen(model: EditorViewModel, onBack: () -> Unit) {
                         }
                     }
                     "notes" -> {
+                        var scrollbarMenu by remember { mutableStateOf(false) }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(AppMessages.text(R.string.scrollbar_position), Modifier.weight(1f))
+                            Box {
+                                TextButton(onClick = { scrollbarMenu = true },
+                                    modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.scrollbar_position) }) {
+                                    Text(AppMessages.text(if (library.value.scrollbarOnLeft) R.string.scrollbar_left else R.string.scrollbar_right))
+                                    Icon(ToolbarIcons.Expand, null, Modifier.padding(start = 8.dp))
+                                }
+                                DropdownMenu(scrollbarMenu, { scrollbarMenu = false }) {
+                                    listOf(true to R.string.scrollbar_left, false to R.string.scrollbar_right).forEach { (left, label) ->
+                                        DropdownMenuItem({ Text(AppMessages.text(label)) }, {
+                                            scrollbarMenu = false
+                                            model.scrollbarOnLeft(left)
+                                        })
+                                    }
+                                }
+                            }
+                        }
+                        HorizontalDivider()
                         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                             .toggleable(preferences.value.pinchResizeMedia, role = Role.Switch, onValueChange = model::pinchResizeMedia)
                             .padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {

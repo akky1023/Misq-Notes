@@ -510,6 +510,10 @@ class EditorViewModel : ViewModel() {
     internal fun defaultPaper(paper: NotePaper) = updateLibrary(mutableLibrary.value.value.copy(paper = paper))
     internal fun suppressPenGestures(enabled: Boolean) = updateLibrary(mutableLibrary.value.value.copy(suppressPenGestures = enabled))
     internal fun listGrid(grid: Boolean) = updateLibrary(mutableLibrary.value.value.copy(grid = grid))
+    internal fun scrollbarOnLeft(left: Boolean) {
+        updateLibrary(mutableLibrary.value.value.copy(scrollbarOnLeft = left))
+        onCanvasChange?.invoke()
+    }
     internal fun strokeCache(mode: StrokeCacheMode) {
         updateLibrary(mutableLibrary.value.value.copy(strokeCache = mode))
         onCanvasChange?.invoke()

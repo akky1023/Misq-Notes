@@ -8,12 +8,26 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class LibraryPreferencesTest {
+    @Test fun scrollbarSideSurvivesRestartAndOlderSettingsDefaultToRight() {
+        val file = File(temp.newFolder(), "library.hwp")
+        assertFalse(LibraryPreferencesFile(file).read().scrollbarOnLeft)
+        for (left in listOf(false, true)) {
+            val value = LibraryPreferences(scrollbarOnLeft = left)
+            LibraryPreferencesFile(file).write(value)
+            assertEquals(value, LibraryPreferencesFile(file).read())
+        }
+        val old = NoteFiles.readEnvelope(file).dropLast(1).toByteArray()
+        java.nio.ByteBuffer.wrap(old).putInt(9)
+        NoteFiles.atomicWrite(file, old)
+        assertEquals(LibraryPreferences(), LibraryPreferencesFile(file).read())
+    }
+
     @Test fun removedCaptureShareChoiceIsIgnoredInVersionSix() {
         val file = File(temp.newFolder(), "library.hwp")
         val current = LibraryPreferences(theme = AppThemeMode.DARK, amoled = true)
         LibraryPreferencesFile(file).write(current)
         assertEquals(current, LibraryPreferencesFile(file).read())
-        val currentBytes = NoteFiles.readEnvelope(file).dropLast(16).toByteArray()
+        val currentBytes = NoteFiles.readEnvelope(file).dropLast(17).toByteArray()
         for (oldChoice in listOf(0, 1)) {
             val versionSix = (currentBytes + byteArrayOf(oldChoice.toByte())).also { java.nio.ByteBuffer.wrap(it).putInt(6) }
             NoteFiles.atomicWrite(file, versionSix)
@@ -27,7 +41,7 @@ class LibraryPreferencesTest {
             LibraryPreferencesFile(file).write(value)
             assertEquals(value, LibraryPreferencesFile(file).read())
         }
-        val old = NoteFiles.readEnvelope(file).dropLast(16).toByteArray()
+        val old = NoteFiles.readEnvelope(file).dropLast(17).toByteArray()
         java.nio.ByteBuffer.wrap(old).putInt(7)
         NoteFiles.atomicWrite(file, old)
         assertEquals(jp.handwriting.note.editor.StrokeCacheMode.NEARBY, LibraryPreferencesFile(file).read().strokeCache)
@@ -199,7 +213,7 @@ class LibraryPreferencesTest {
         val value = LibraryPreferences(paper = NotePaper(pattern = PaperPattern.GRID),
             strokeCache = jp.handwriting.note.editor.StrokeCacheMode.entries.last())
         LibraryPreferencesFile(file).write(value)
-        val bytes = NoteFiles.readEnvelope(file).dropLast(12).toByteArray()
+        val bytes = NoteFiles.readEnvelope(file).dropLast(13).toByteArray()
         java.nio.ByteBuffer.wrap(bytes).putInt(8)
         NoteFiles.atomicWrite(file, bytes)
         assertEquals(value, LibraryPreferencesFile(file).read())

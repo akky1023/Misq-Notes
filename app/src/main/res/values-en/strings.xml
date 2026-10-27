@@ -209,6 +209,9 @@
     <string name="restore_default" formatted="false">"Use default"</string>
     <string name="storage_help" formatted="false">"Your notes and folders move with you. Paper defaults, color palettes and width presets are also saved in the selected location."</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
+    <string name="scrollbar_position">Scrollbar position</string>
+    <string name="scrollbar_left">Left</string>
+    <string name="scrollbar_right">Right</string>
     <string name="stroke_cache">Stroke cache</string>
     <string name="stroke_cache_limited">Up to 128 strokes (less memory)</string>
     <string name="stroke_cache_visible">All strokes on screen</string>
