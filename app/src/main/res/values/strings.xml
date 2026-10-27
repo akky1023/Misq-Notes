@@ -236,7 +236,8 @@
     <string name="preview_position">プレビューの表示位置</string>
     <string name="preview_retry">プレビューを再読み込み</string>
     <string name="preview_star_filter">星の行のみ表示</string>
-    <string name="preview_resize">プレビューの横幅を変更</string>
+    <string name="preview_handle_open">タップまたは外側へスワイプで閉じる。長押し後、横に動かして幅、上下に動かして位置を変更</string>
+    <string name="preview_handle_closed">タップまたは中央へスワイプで開く。長押し後、上下に動かして位置を変更</string>
     <string name="preview_star_rows">星の行のプレビュー</string>
     <string name="preview_star_row">星の行 %1$s</string>
     <string name="preview_no_stars">星のある行はありません</string>

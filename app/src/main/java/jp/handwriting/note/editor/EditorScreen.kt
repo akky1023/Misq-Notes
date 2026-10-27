@@ -8,13 +8,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -27,9 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
-import androidx.compose.ui.semantics.progressBarRangeInfo
-import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.viewinterop.AndroidView
@@ -56,7 +51,11 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     var optionsDialog by rememberSaveable { mutableStateOf(false) }
     var previewVisible by rememberSaveable(workspace.current?.id) { mutableStateOf(false) }
     var preferredPreviewWidth by rememberSaveable { mutableStateOf<Float?>(null) }
-    val previewFraction by animateFloatAsState(if (previewVisible) 1f else 0f, tween(220), label = "notePreviewVisibility")
+    var previewHandlePosition by rememberSaveable { mutableFloatStateOf(0.5f) }
+    var previewSwipeFraction by remember(workspace.current?.id, library.value.previewOnRight) { mutableStateOf<Float?>(null) }
+    val animatedPreviewFraction by animateFloatAsState(previewSwipeFraction ?: if (previewVisible) 1f else 0f,
+        if (previewSwipeFraction != null) snap() else tween(220), label = "notePreviewVisibility")
+    val previewFraction = previewSwipeFraction ?: animatedPreviewFraction
     var optionsAnchor by remember { mutableStateOf<IntRect?>(null) }
     var toolbarDock by remember { mutableStateOf(ToolbarDock(0.5f, 0f, DockEdge.TOP)) }
     val context = LocalContext.current
@@ -162,7 +161,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         .requiredWidth(fullPreviewWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainer) {
                         Box {
                             NotePreview(model, Modifier.fillMaxSize(),
-                                onRight = library.value.previewOnRight)
+                                onRight = library.value.previewOnRight, renderContent = previewSwipeFraction == null && previewFraction == 1f)
                             VerticalDivider(Modifier.align(if (library.value.previewOnRight) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight())
                         }
                     }
@@ -178,45 +177,35 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         IconButton(onClick = { optionsDialog = true }, modifier = Modifier.editorPopoverAnchor { optionsAnchor = it }.semantics { contentDescription = AppMessages.text(R.string.note_settings) }) {
                             Icon(ToolbarIcons.Settings, null)
                         }
-                        IconToggleButton(checked = previewVisible, onCheckedChange = { previewVisible = it },
-                            modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.note_preview) }) {
-                            Icon(ToolbarIcons.Preview, null)
-                        }
                     }
                 }
-                if (previewVisible) {
-                    val resizePreview: (Float) -> Unit = { width ->
-                        preferredPreviewWidth = width.coerceIn(minimumPreviewWidth.value, maximumPreviewWidth.value)
-                    }
-                    val dragState = rememberDraggableState { delta ->
+                val handleTravel = (maxHeight - 80.dp).coerceAtLeast(0.dp)
+                PreviewHandle(visible = previewVisible, onRight = library.value.previewOnRight, openProgress = previewFraction,
+                    onToggle = { previewVisible = !previewVisible },
+                    onSwipeStart = { previewSwipeFraction = previewFraction },
+                    onSwipe = { delta ->
+                        val width = with(density) { fullPreviewWidth.toPx() }
+                        if (width > 0f) previewSwipeFraction = ((previewSwipeFraction ?: previewFraction) + delta / width).coerceIn(0f, 1f)
+                    },
+                    onSwipeEnd = { target ->
+                        if (target != null) previewVisible = target
+                        previewSwipeFraction = null
+                    },
+                    onResize = { delta ->
                         val width = (preferredPreviewWidth?.dp ?: fullPreviewWidth)
                             .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
-                        resizePreview(width.value + with(density) { delta.toDp().value })
-                    }
-                    Box(Modifier.align(Alignment.CenterStart)
-                        .offset(x = (if (library.value.previewOnRight) maxWidth - previewWidth else previewWidth) - 12.dp)
-                        .size(width = 24.dp, height = 80.dp)
-                        .semantics {
-                            contentDescription = AppMessages.text(R.string.preview_resize)
-                            progressBarRangeInfo = ProgressBarRangeInfo(fullPreviewWidth.value,
-                                minimumPreviewWidth.value..maximumPreviewWidth.value)
-                            setProgress { resizePreview(it); true }
-                        }
-                        .draggable(state = dragState, orientation = Orientation.Horizontal,
-                            enabled = previewFraction == 1f, reverseDirection = library.value.previewOnRight),
-                        contentAlignment = Alignment.Center) {
-                        Surface(Modifier.size(width = 12.dp, height = 56.dp), shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerHighest, shadowElevation = 3.dp) {
-                            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(2.dp, Alignment.CenterHorizontally),
-                                verticalAlignment = Alignment.CenterVertically) {
-                                repeat(2) {
-                                    Surface(Modifier.size(width = 2.dp, height = 24.dp), shape = RoundedCornerShape(1.dp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant) {}
-                                }
-                            }
-                        }
-                    }
-                }
+                        preferredPreviewWidth = (width.value + with(density) { delta.toDp().value })
+                            .coerceIn(minimumPreviewWidth.value, maximumPreviewWidth.value)
+                    },
+                    onMove = { delta ->
+                        val travel = with(density) { handleTravel.toPx() }
+                        if (travel > 0f) previewHandlePosition = (previewHandlePosition + delta / travel).coerceIn(0f, 1f)
+                    },
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .offset(x = (if (library.value.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * previewFraction
+                            else previewWidth - 24.dp * previewFraction)
+                            .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp)), y = handleTravel * previewHandlePosition)
+                        .size(width = 48.dp, height = 80.dp))
             }
         }
     CompositionLocalProvider(LocalEditorPopoverAnchor provides optionsAnchor) {

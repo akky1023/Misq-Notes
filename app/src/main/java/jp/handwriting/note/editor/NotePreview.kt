@@ -53,15 +53,16 @@ private data class PreviewDocument(val entries: List<OrderedEdits.Entry<EditorSt
     val bottom: Float, val starIds: Set<String>, val rows: List<StarPreviewRows.Row>)
 
 @Composable
-internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, onRight: Boolean = false) {
+internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, onRight: Boolean = false,
+    renderContent: Boolean = true) {
     val ui by model.ui.collectAsStateWithLifecycle()
     val workspace by model.workspace.collectAsStateWithLifecycle()
     val visibleRegion by model.visibleRegion.collectAsStateWithLifecycle()
     val note = workspace.current ?: return
     var document by remember(note.id) { mutableStateOf<PreviewDocument?>(null) }
     val starCache = remember(note.id) { mutableMapOf<String, StrokeIndex.Bounds?>() }
-    LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy) {
-        if (ui.busy) return@LaunchedEffect
+    LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy, renderContent) {
+        if (ui.busy || !renderContent) return@LaunchedEffect
         delay(300)
         val entries = model.edits.snapshot()
         val bottom = maxOf(1000f, model.contentBottom + 24f)
@@ -89,11 +90,13 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
         val state = rememberLazyListState()
         val starState = rememberLazyListState()
         Box(modifier) {
+            if (renderContent) {
             val contentModifier = Modifier.fillMaxSize()
             if (starsOnly) StarRowsPreview(model, document, visibleRegion, ui.busy || workspace.working, starState, contentModifier)
             else WholeNotePreview(model, document, visibleRegion, ui.busy || workspace.working, state, contentModifier)
             PreviewStarButton(starsOnly, { starsOnly = !starsOnly },
                 Modifier.align(if (onRight) AbsoluteAlignment.BottomRight else AbsoluteAlignment.BottomLeft).padding(8.dp))
+            }
         }
     }
 }

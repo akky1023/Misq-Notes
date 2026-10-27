@@ -11,6 +11,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.DashPathEffect
 import android.graphics.RectF
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.SystemClock
@@ -470,9 +471,23 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         if (model.onCanvasChange === changeListener) model.onCanvasChange = null
         super.onDetachedFromWindow()
     }
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        // Ink recreates screen-sized front buffers when its SurfaceView changes size.
+        // Keep that backing surface at the window size while the preview boundary moves;
+        // the completed canvas and viewport still use the actual editor dimensions.
+        val surfaceWidth = maxOf(MeasureSpec.getSize(widthMeasureSpec), rootView.width)
+        val surfaceHeight = maxOf(MeasureSpec.getSize(heightMeasureSpec), rootView.height)
+        ink.layoutParams.apply {
+            width = surfaceWidth
+            height = surfaceHeight
+        }
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (oldw != 0 && (w != oldw || h != oldh)) cancelGesture()
+        ink.clipBounds = Rect(0, 0, w, h)
         model.viewport.size(w.toFloat(), h.toFloat())
         updateTransforms()
         completed.invalidate()
