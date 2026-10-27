@@ -8,6 +8,9 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -44,6 +47,8 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     val library by model.library.collectAsStateWithLifecycle()
     var paperDialog by rememberSaveable { mutableStateOf(false) }
     var optionsDialog by rememberSaveable { mutableStateOf(false) }
+    var previewVisible by rememberSaveable(workspace.current?.id) { mutableStateOf(false) }
+    val previewFraction by animateFloatAsState(if (previewVisible) 1f else 0f, tween(220), label = "notePreviewVisibility")
     var optionsAnchor by remember { mutableStateOf<IntRect?>(null) }
     var toolbarDock by remember { mutableStateOf(ToolbarDock(0.5f, 0f, DockEdge.TOP)) }
     val context = LocalContext.current
@@ -70,7 +75,13 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     NotebookTheme(library.value.theme, library.value.amoled) {
         val importDocument = rememberDocumentImporter(model)
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            Box(Modifier.fillMaxSize().safeDrawingPadding()) {
+            BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+                val fullPreviewWidth = (maxWidth * 0.22f).coerceAtMost(200.dp)
+                val previewWidth = fullPreviewWidth * previewFraction
+                Box(Modifier.fillMaxSize().padding(
+                    start = if (library.value.previewOnRight) 0.dp else previewWidth,
+                    end = if (library.value.previewOnRight) previewWidth else 0.dp,
+                )) {
                     AndroidView(
                         factory = { InkCanvasView(it, model).also(onCanvas) },
                         modifier = Modifier.fillMaxSize(),
@@ -104,16 +115,6 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         }
                     }
                     SelectionClipboard(model, selection)
-                    Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = onNotes, modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.back_to_notes) }) {
-                            Icon(ToolbarIcons.Back, null)
-                        }
-                        IconButton(onClick = { optionsDialog = true }, modifier = Modifier.editorPopoverAnchor { optionsAnchor = it }.semantics { contentDescription = AppMessages.text(R.string.note_settings) }) {
-                            Icon(ToolbarIcons.Settings, null)
-                        }
-                        }
-                    }
                 if (zoomPercent != 100) Surface(
                     Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = when {
                         toolbarDock.edge == DockEdge.CORNER && toolbarDock.x == 0f && toolbarDock.y == 1f -> 120.dp
@@ -139,6 +140,34 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                             .semantics { contentDescription = AppMessages.text(R.string.saving) },
                         strokeWidth = 2.dp,
                     )
+                }
+                }
+                if (previewVisible || previewFraction > 0f) {
+                    Box(Modifier.align(if (library.value.previewOnRight) Alignment.TopEnd else Alignment.TopStart)
+                        .width(previewWidth).fillMaxHeight().clipToBounds().graphicsLayer { alpha = previewFraction }) {
+                    Surface(Modifier.align(if (library.value.previewOnRight) Alignment.TopStart else Alignment.TopEnd)
+                        .wrapContentWidth(if (library.value.previewOnRight) Alignment.Start else Alignment.End, unbounded = true)
+                        .requiredWidth(fullPreviewWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainer) {
+                        Box {
+                            NotePreview(model, Modifier.fillMaxSize().padding(top = 72.dp, start = 8.dp, end = 8.dp, bottom = 16.dp))
+                            VerticalDivider(Modifier.align(if (library.value.previewOnRight) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight())
+                        }
+                    }
+                    }
+                }
+                Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = onNotes, modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.back_to_notes) }) {
+                            Icon(ToolbarIcons.Back, null)
+                        }
+                        IconButton(onClick = { optionsDialog = true }, modifier = Modifier.editorPopoverAnchor { optionsAnchor = it }.semantics { contentDescription = AppMessages.text(R.string.note_settings) }) {
+                            Icon(ToolbarIcons.Settings, null)
+                        }
+                        IconToggleButton(checked = previewVisible, onCheckedChange = { previewVisible = it },
+                            modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.note_preview) }) {
+                            Icon(ToolbarIcons.Preview, null)
+                        }
+                    }
                 }
             }
         }

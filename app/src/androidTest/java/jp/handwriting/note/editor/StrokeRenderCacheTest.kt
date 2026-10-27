@@ -13,6 +13,74 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class StrokeRenderCacheTest {
+    @Test fun ordinaryRetainedGroupsKeepTheirBaseAndTailWhenTheyReturnWithoutZooming() {
+        val cache = StrokeRenderCache()
+        val target = RenderNode("retained-reentry")
+        val first = EditorStroke(ink())
+        val appended = EditorStroke(ink())
+        val retained = setOf(first, appended)
+        var drawn = 0
+        fun draw(entries: List<Pair<Long, EditorStroke>>, top: Float) {
+            val canvas = target.beginRecording(1000, 1000)
+            try {
+                cache.draw(canvas, entries, ViewPosition(top = top), 1000, 1000, WorldPoint(0f, 0f),
+                    { false }, retainedStrokes = retained) { _, _, _ -> drawn++ }
+            } finally { target.endRecording() }
+        }
+        try {
+            draw(listOf(1L to first), 0f)
+            draw(listOf(1L to first, 2L to appended), 0f)
+            assertTrue(cache.pendingCompaction)
+            val recorded = cache.recordedGroups
+            draw(emptyList(), 2000f)
+            drawn = 0
+            draw(listOf(1L to first, 2L to appended), 0f)
+            assertEquals("Ordinary retained strokes must reuse their display lists", 0, drawn)
+            assertEquals(recorded, cache.recordedGroups)
+            assertTrue(cache.pendingCompaction)
+            drawn = 0
+            draw(listOf(1L to first, 2L to appended), 10f)
+            assertEquals("Panning within the visible region still reuses the cache", 0, drawn)
+        } finally { cache.clear(); target.discardDisplayList() }
+    }
+
+    @Test fun returningStarIsRecordedAloneWhileItsOrdinaryNeighboursAreReused() {
+        val cache = StrokeRenderCache()
+        val target = RenderNode("star-only-reentry")
+        val before = EditorStroke(ink())
+        val star = EditorStroke(ink())
+        val after = EditorStroke(ink())
+        val all = listOf(1L to before, 2L to star, 3L to after)
+        val drawn = mutableListOf<EditorStroke>()
+        fun draw(entries: List<Pair<Long, EditorStroke>>, top: Float) {
+            val canvas = target.beginRecording(1000, 1000)
+            try {
+                cache.draw(canvas, entries, ViewPosition(top = top), 1000, 1000, WorldPoint(0f, 0f),
+                    { false }, retainedStrokes = setOf(before, star, after), starIds = setOf(2L)) {
+                    _, stroke, _ -> drawn.add(stroke)
+                }
+            } finally { target.endRecording() }
+        }
+        try {
+            draw(all, 0f)
+            assertEquals(listOf(before, star, after), drawn)
+            val recorded = cache.recordedGroups
+            draw(emptyList(), 2000f)
+            drawn.clear()
+            draw(all, 0f)
+            assertEquals("Only the star is rebuilt on re-entry", listOf(star), drawn)
+            assertEquals(recorded + 1, cache.recordedGroups)
+            drawn.clear()
+            draw(listOf(1L to before, 3L to after), 100f)
+            assertTrue("Hiding a star must not repartition its ordinary neighbours", drawn.isEmpty())
+            draw(all, 0f)
+            assertEquals(listOf(star), drawn)
+            drawn.clear()
+            draw(all, 10f)
+            assertTrue("A star still visible on screen retains its cache", drawn.isEmpty())
+        } finally { cache.clear(); target.discardDisplayList() }
+    }
+
     @Test fun panningReusesGroupsAndAppendedTailsUntilZoomOrSizeChanges() {
         val ink = ink(); val cache = StrokeRenderCache(); val target = RenderNode("pan-test")
         var entries = (1L..300L).map { it to EditorStroke(ink) }

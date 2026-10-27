@@ -24,7 +24,8 @@ internal data class LibraryPreferences(val folders: List<NoteFolder> = emptyList
     val grid: Boolean = true, val paper: NotePaper = NotePaper(), val suppressPenGestures: Boolean = false,
     val sorts: Map<String, NoteSort> = emptyMap(), val orders: Map<String, List<String>> = emptyMap(),
     val theme: AppThemeMode = AppThemeMode.SYSTEM, val amoled: Boolean = false,
-    val strokeCache: StrokeCacheMode = StrokeCacheMode.NEARBY) {
+    val strokeCache: StrokeCacheMode = StrokeCacheMode.NEARBY,
+    val previewOnRight: Boolean = false) {
     init {
         require(folders.size <= 10000 && locations.size <= 100000)
         val ids = folders.map { it.id }.toSet()
@@ -90,7 +91,7 @@ internal class LibraryPreferencesFile(private val file: File) {
     fun write(value: LibraryPreferences) {
         check(file.parentFile!!.isDirectory || file.parentFile!!.mkdirs())
         val bytes = ByteArrayOutputStream().also { b -> DataOutputStream(b).use { out ->
-            out.writeInt(9); out.writeBoolean(value.grid)
+            out.writeInt(11); out.writeBoolean(value.grid)
             out.writeInt(value.paper.color); out.writeInt(value.paper.pattern.ordinal); out.writeInt(value.paper.lineColor); out.writeInt(value.paper.spacing)
             out.writeFloat(value.paper.lineWidth); out.writeBoolean(value.suppressPenGestures)
             out.writeInt(value.folders.size)
@@ -102,13 +103,15 @@ internal class LibraryPreferencesFile(private val file: File) {
             out.writeBoolean(value.amoled)
             out.writeInt(value.strokeCache.ordinal)
             value.paper.writeMargin(out)
+            out.writeBoolean(false) // Reserved legacy scrollbar position, retained for format compatibility.
+            out.writeBoolean(value.previewOnRight)
         } }.toByteArray()
         NoteFiles.atomicWrite(file, bytes)
         LibraryJson.write(File(file.parentFile, "library.json"), value)
     }
     private fun decode(bytes: ByteArray): LibraryPreferences = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
         try {
-            val version = input.readInt(); require(version in 1..9); val grid = input.readBoolean()
+            val version = input.readInt(); require(version in 1..11); val grid = input.readBoolean()
             var paper = NotePaper(input.readInt(), PaperPattern.entries[input.readInt()], input.readInt(), input.readInt(), if (version >= 2) input.readFloat() else 1f)
             val suppress = version >= 2 && input.readBoolean()
             val count = input.readInt(); require(count in 0..10000)
@@ -134,8 +137,10 @@ internal class LibraryPreferencesFile(private val file: File) {
             if (version == 6) input.readBoolean() // Removed capture-sharing preference.
             val strokeCache = if (version >= 8) StrokeCacheMode.entries[input.readInt()] else StrokeCacheMode.NEARBY
             if (version >= 9) paper = paper.readMargin(input)
+            if (version >= 10) input.readBoolean() // Removed scrollbar position.
+            val previewOnRight = version >= 11 && input.readBoolean()
             require(input.available() == 0)
-            LibraryPreferences(folders, pairs.toMap(), grid, paper, suppress, sorts, orders, theme, amoled, strokeCache)
+            LibraryPreferences(folders, pairs.toMap(), grid, paper, suppress, sorts, orders, theme, amoled, strokeCache, previewOnRight)
         } catch (e: RuntimeException) { throw IOException("Invalid library settings", e) }
     }
 }

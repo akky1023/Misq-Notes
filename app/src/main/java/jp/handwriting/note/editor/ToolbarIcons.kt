@@ -13,6 +13,11 @@ import androidx.compose.ui.unit.dp
 
 // Small vector assets keep the toolbar crisp at every display density.
 internal object ToolbarIcons {
+    val Preview = icon("Preview") {
+        moveTo(4f, 3f); lineTo(20f, 3f); lineTo(20f, 21f); lineTo(4f, 21f); close()
+        moveTo(7f, 7f); lineTo(17f, 7f); lineTo(17f, 13f); lineTo(7f, 13f); close()
+        moveTo(7f, 17f); lineTo(14f, 17f)
+    }
     val FreeLasso = icon("FreeLasso") {
         moveTo(7f, 5f)
         curveTo(7.618366f, 4.175511f, 8.449165f, 3.605941f, 9.387306f, 3.251004f)

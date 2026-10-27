@@ -13,7 +13,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class InkCanvasStartupTest {
-    @Test fun firstDrawAndZoomedDrawHaveInitializedPersistentScrollbars() {
+    @Test fun firstDrawAndZoomedDrawWorkWithSubtlePositionIndicators() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
             val model = EditorViewModel()
@@ -22,9 +22,8 @@ class InkCanvasStartupTest {
             val view = InkCanvasView(context.createDisplayContext(display), model)
             val bitmap = Bitmap.createBitmap(800, 1000, Bitmap.Config.ARGB_8888)
             try {
-                assertNotNull(view.verticalScrollbarThumbDrawable)
-                assertNotNull(view.horizontalScrollbarThumbDrawable)
-                assertFalse(view.isScrollbarFadingEnabled)
+                assertFalse(view.isVerticalScrollBarEnabled)
+                assertFalse(view.isHorizontalScrollBarEnabled)
                 view.measure(View.MeasureSpec.makeMeasureSpec(800, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(1000, View.MeasureSpec.EXACTLY))
                 view.layout(0, 0, 800, 1000)
@@ -32,6 +31,14 @@ class InkCanvasStartupTest {
                 model.viewport.restore(ViewPosition(2f, 250f, 1000f))
                 view.layout(0, 0, 799, 1000)
                 view.draw(Canvas(bitmap))
+                val density = view.resources.displayMetrics.density
+                val paper = bitmap.getPixel(100, 100)
+                val vertical = bitmap.getPixel((view.width - 4f * density).toInt(), (view.height - 8f * density).toInt())
+                val horizontal = bitmap.getPixel(view.width / 2, (view.height - 4f * density).toInt())
+                for (indicator in listOf(vertical, horizontal)) {
+                    val contrast = android.graphics.Color.red(paper) - android.graphics.Color.red(indicator)
+                    assertTrue("Indicators should be visible but faint", contrast in 10..80)
+                }
             } finally { bitmap.recycle() }
         }
     }

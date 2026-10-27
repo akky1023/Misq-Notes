@@ -20,6 +20,55 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class EditorToolsTest {
+    @Test fun canvasEdgesUseOrdinaryFingerPanningWithoutDrawing() = runBlocking {
+        withModel { model ->
+            withContext(Dispatchers.Main) {
+                val target = InstrumentationRegistry.getInstrumentation().targetContext
+                val display = target.getSystemService(android.hardware.display.DisplayManager::class.java)
+                    .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                val context = target.createDisplayContext(display)
+                val density = context.resources.displayMetrics.density
+                val canvas = InkCanvasView(context, model)
+                assertFalse(canvas.isVerticalScrollBarEnabled)
+                assertFalse(canvas.isHorizontalScrollBarEnabled)
+                val width = (600 * density).toInt()
+                val height = (800 * density).toInt()
+                canvas.layout(0, 0, width, height)
+                model.viewport.restore(ViewPosition(2f, 100f, 500f))
+                model.edits.restore(listOf(OrderedEdits.Entry(1L, stroke(100f, 10000f))))
+                val initial = model.viewport.position
+                val count = model.edits.snapshot().size
+                fun touch(action: Int, x: Float, y: Float) {
+                    val properties = android.view.MotionEvent.PointerProperties().apply { id = 0; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER }
+                    val coordinates = android.view.MotionEvent.PointerCoords().apply {
+                        this.x = x
+                        this.y = y; pressure = 1f
+                    }
+                    val event = android.view.MotionEvent.obtain(0L, 10L, action, 1, arrayOf(properties), arrayOf(coordinates),
+                        0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                    try { assertTrue(canvas.onTouchEvent(event)) } finally { event.recycle() }
+                }
+                for (left in listOf(false, true)) {
+                    model.viewport.restore(initial)
+                    val x = if (left) 8 * density else width - 8 * density
+                    touch(android.view.MotionEvent.ACTION_DOWN, x, 100 * density)
+                    touch(android.view.MotionEvent.ACTION_MOVE, x, 200 * density)
+                    assertTrue(model.viewport.position.top < initial.top)
+                    touch(android.view.MotionEvent.ACTION_CANCEL, x, 200 * density)
+                    assertEquals(initial, model.viewport.position)
+                    touch(android.view.MotionEvent.ACTION_DOWN, x, 100 * density)
+                    touch(android.view.MotionEvent.ACTION_MOVE, x, 200 * density)
+                    touch(android.view.MotionEvent.ACTION_UP, x, 200 * density)
+                    assertTrue(model.viewport.position.top < initial.top)
+                    assertEquals(initial.zoom, model.viewport.position.zoom, 0f)
+                    assertEquals(initial.left, model.viewport.position.left, 0.01f)
+                    assertEquals(count, model.edits.snapshot().size)
+                }
+                canvas.settleForPause()
+            }
+        }
+    }
+
     @Test fun insertedSpaceMovesAllLowerStrokesAndSupportsUndoRedoAndReload() = runBlocking {
         withModel { model ->
             withContext(Dispatchers.Main) {

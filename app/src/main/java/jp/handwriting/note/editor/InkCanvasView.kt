@@ -41,6 +41,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val viewToStroke = Matrix()
     private var scale = 1f
     private val renderer = CanvasStrokeRenderer.create()
+    // Recoloring a shared mesh for the flash must not modify resources in completed display lists.
+    private val flashRenderer = CanvasStrokeRenderer.create()
     private val strokeFidelity = StrokeFidelityCache()
     private val strokeCache = StrokeRenderCache(renderAppendLimit)
     private data class RetentionState(val revision: Long, val position: ViewPosition, val width: Int,
@@ -49,6 +51,94 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var retainedStrokes = emptySet<EditorStroke>()
     private var prefetchScope: CoroutineScope? = null
     private var prefetchJob: Job? = null
+    private val starClassifications = java.util.WeakHashMap<EditorStroke, Boolean>()
+    private val pendingStarClassifications = mutableSetOf<EditorStroke>()
+    private val detectedStars = mutableMapOf<Long, EditorStroke>()
+    private var starNoteId: String? = null
+
+    private fun classifyVisibleStars(visible: List<Pair<Long, EditorStroke>>) {
+        val noteId = model.workspace.value.current?.id ?: return
+        val scope = prefetchScope ?: return
+        if (starNoteId != noteId) {
+            detectedStars.clear()
+            starNoteId = noteId
+        }
+        val pending = mutableListOf<Pair<Long, EditorStroke>>()
+        visible.forEach { entry ->
+            when (starClassifications[entry.second]) {
+                true -> detectedStars[entry.first] = entry.second
+                false -> detectedStars.remove(entry.first)
+                null -> {
+                    detectedStars.remove(entry.first)
+                    if (pendingStarClassifications.add(entry.second)) pending.add(entry)
+                }
+            }
+        }
+        if (pending.isEmpty()) return
+        scope.launch {
+            try {
+                val results = withContext(Dispatchers.Default) {
+                    pending.map { entry ->
+                        ensureActive()
+                        val ink = entry.second.inkOrNull
+                        val star = ink != null && SingleStrokeStar.matches(List(ink.inputs.size) { i ->
+                            val p = ink.inputs[i]; SingleStrokeStar.Point(p.x, p.y)
+                        })
+                        entry to star
+                    }
+                }
+                if (model.workspace.value.current?.id == noteId) {
+                    results.forEach { (entry, star) ->
+                        starClassifications[entry.second] = star
+                        if (star) detectedStars[entry.first] = entry.second
+                    }
+                    completed.invalidate()
+                }
+            } finally { pending.forEach { pendingStarClassifications.remove(it.second) } }
+        }
+    }
+    private data class StarFlash(val source: EditorStroke, val orange: Stroke, val noteId: String, val startedAt: Long)
+    private val starFlashes = mutableListOf<StarFlash>()
+
+    /** Only newly completed pen contacts flash; restoring, undo and preview navigation do not. */
+    private fun flashIfStar(source: EditorStroke) {
+        val noteId = model.workspace.value.current?.id ?: return
+        val stroke = source.inkOrNull ?: return
+        prefetchScope?.launch {
+            val orange = withContext(Dispatchers.Default) {
+                if (!SingleStrokeStar.matches(List(stroke.inputs.size) { i ->
+                    val p = stroke.inputs[i]; SingleStrokeStar.Point(p.x, p.y)
+                })) null else stroke.copy(stroke.brush.copyWithColorIntArgb(0xFFFF9800.toInt()))
+            } ?: return@launch
+            if (isAttachedToWindow && model.workspace.value.current?.id == noteId &&
+                model.visibleStrokeEntries().any { it.second === source }) {
+                starClassifications[source] = true
+                starFlashes.add(StarFlash(source, orange, noteId, SystemClock.uptimeMillis()))
+                completed.invalidate()
+                postInvalidateOnAnimation()
+            }
+        }
+    }
+
+    private fun drawStarFlashes(canvas: Canvas) {
+        if (starFlashes.isEmpty()) return
+        val now = SystemClock.uptimeMillis()
+        val visible = model.visibleStrokeEntries().mapTo(mutableSetOf()) { it.second }
+        starFlashes.removeAll { now - it.startedAt >= 400L || it.noteId != model.workspace.value.current?.id || it.source !in visible }
+        for (flash in starFlashes) {
+            val bounds = flash.source.bounds ?: continue
+            val elapsed = now - flash.startedAt
+            val alpha = if (elapsed < 80L) 255 else ((400L - elapsed) * 255 / 320L).toInt().coerceIn(0, 255)
+            canvas.save()
+            canvas.concat(strokeToView)
+            // A small layer fades only this stroke, retaining its actual pressure-sensitive shape.
+            canvas.saveLayerAlpha(bounds.xMin - 2f, bounds.yMin - 2f, bounds.xMax + 2f, bounds.yMax + 2f, alpha)
+            flashRenderer.draw(canvas, flash.orange, strokeToView)
+            canvas.restore()
+            canvas.restore()
+        }
+        if (starFlashes.isNotEmpty()) postInvalidateOnAnimation()
+    }
 
     private fun updateRetention(visible: List<Pair<Long, EditorStroke>>) {
         val mode = model.library.value.value.strokeCache
@@ -86,6 +176,9 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val defaultPaper = jp.handwriting.note.storage.NotePaper()
     private val completed: View = object : View(context) {
         override fun onDraw(canvas: Canvas) {
+            // Finger panning also draws this view without going through changeListener.
+            // Compare later navigation with the frame actually drawn, not the last notification.
+            completedState = currentCompletedState()
             canvas.save()
             canvas.concat(strokeToView)
             paperBounds.set(model.viewport.position.left, model.viewport.position.top, model.viewport.right, model.viewport.bottom)
@@ -93,9 +186,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             canvas.restore()
             val compact = pointerId == null && fingerStart == null && !model.ui.value.busy && SystemClock.uptimeMillis() - lastCanvasChange >= 500
             val visible = model.visibleStrokeEntries()
+            classifyVisibleStars(visible)
             updateRetention(visible)
             strokeCache.draw(canvas, visible, model.viewport.position,
-                width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes, model.selectionScale) { target, entry, selected ->
+                width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes, model.selectionScale,
+                starIds = detectedStars.keys) { target, entry, selected ->
                 target.save()
                 target.concat(strokeToView)
                 if (selected) target.translate(model.selectionOffset.x, model.selectionOffset.y)
@@ -258,16 +353,44 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.rgb(154, 88, 53); style = Paint.Style.STROKE; strokeWidth = 2f
     }
+    private val scrollIndicatorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private fun drawScrollIndicators(canvas: Canvas) {
+        val density = resources.displayMetrics.density
+        val inset = 3f * density
+        val thickness = 2f * density
+        val paper = model.workspace.value.current?.paper?.color ?: defaultPaper.color
+        val brightness = Color.red(paper) * 299 + Color.green(paper) * 587 + Color.blue(paper) * 114
+        scrollIndicatorPaint.color = if (brightness < 128000) Color.argb(64, 255, 255, 255) else Color.argb(64, 0, 0, 0)
+        val extent = model.viewport.height / model.viewport.scale
+        val bottom = maxOf(model.contentBottom + 200f, model.viewport.bottom)
+        val maxTop = (bottom - extent).coerceAtLeast(0f)
+        if (maxTop > 0f) {
+            val track = (height - 2f * inset).coerceAtLeast(0f)
+            val thumb = (track * extent / bottom).coerceIn(minOf(24f * density, track), track)
+            val top = inset + (track - thumb) * (model.viewport.position.top / maxTop).coerceIn(0f, 1f)
+            canvas.drawRoundRect(width - inset - thickness, top, width - inset, top + thumb,
+                thickness / 2f, thickness / 2f, scrollIndicatorPaint)
+        }
+        val maxLeft = Viewport.WIDTH - Viewport.WIDTH / model.viewport.position.zoom
+        if (maxLeft > 0f) {
+            val track = (width - 2f * inset).coerceAtLeast(0f)
+            val thumb = track / model.viewport.position.zoom
+            val left = inset + (track - thumb) * (model.viewport.position.left / maxLeft).coerceIn(0f, 1f)
+            canvas.drawRoundRect(left, height - inset - thickness, left + thumb, height - inset,
+                thickness / 2f, thickness / 2f, scrollIndicatorPaint)
+        }
+    }
     private val recovery = mutableMapOf<InProgressStrokeId, Recovery>()
     private data class CompletedState(val revision: Long, val position: ViewPosition,
         val paper: jp.handwriting.note.storage.NotePaper?, val selectionOffset: WorldPoint, val cacheMode: StrokeCacheMode)
     private var completedState: CompletedState? = null
+    private fun currentCompletedState() = CompletedState(model.canvasRevision, model.viewport.position,
+        model.workspace.value.current?.paper, model.selectionOffset, model.library.value.value.strokeCache)
     private val changeListener: () -> Unit = {
         updateTransforms()
-        val state = CompletedState(model.canvasRevision, model.viewport.position,
-            model.workspace.value.current?.paper, model.selectionOffset, model.library.value.value.strokeCache)
+        val state = currentCompletedState()
         if (state != completedState) {
-            completedState = state
             lastCanvasChange = SystemClock.uptimeMillis()
             completed.invalidate()
             completed.removeCallbacks(compactStrokes)
@@ -310,24 +433,16 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         addView(ink, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         // Allocate Ink's rendering resources before the first actual pen contact.
         ink.eagerInit()
-        isVerticalScrollBarEnabled = true
-        isHorizontalScrollBarEnabled = true
-        // Enabling flags creates no drawable on a programmatically constructed View.
-        // Set both thumbs before keeping the scrollbars permanently visible.
-        fun scrollThumb() = GradientDrawable().apply {
-            setColor(Color.argb(140, 72, 86, 94))
-            cornerRadius = 2f * resources.displayMetrics.density
-            setSize((4f * resources.displayMetrics.density).toInt().coerceAtLeast(1),
-                (4f * resources.displayMetrics.density).toInt().coerceAtLeast(1))
-        }
-        verticalScrollbarThumbDrawable = scrollThumb()
-        horizontalScrollbarThumbDrawable = scrollThumb()
-        isScrollbarFadingEnabled = false
-        scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+        isVerticalScrollBarEnabled = false
+        isHorizontalScrollBarEnabled = false
         ink.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
             override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
                 strokes.forEach { (id, stroke) ->
-                    recovery.remove(id)?.let { model.edits.resolveStroke(it.operation, EditorStroke(stroke)) }
+                    recovery.remove(id)?.let {
+                        val source = EditorStroke(stroke)
+                        model.edits.resolveStroke(it.operation, source)
+                        flashIfStar(source)
+                    }
                 }
                 // Transfer both layers in the same UI loop to avoid gaps or double drawing.
                 completed.invalidate()
@@ -347,6 +462,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         settleForPause()
         completed.removeCallbacks(compactStrokes)
         prefetchScope?.cancel(); prefetchScope = null; prefetchJob = null
+        pendingStarClassifications.clear(); detectedStars.clear(); starClassifications.clear(); starNoteId = null
+        starFlashes.clear()
         retentionState = null; retainedStrokes = emptySet()
         strokeCache.clear()
         strokeFidelity.clear()
@@ -366,7 +483,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             0f, scale, -model.viewport.position.top * scale, 0f, 0f, 1f))
         strokeToView.invert(viewToStroke)
         model.updateViewportOverlay()
-        invalidate() // Scroll bars belong to this View, rather than the completed-stroke child.
+        invalidate()
     }
     override fun onInterceptTouchEvent(event: MotionEvent) = true
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -552,6 +669,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     }
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
+        drawStarFlashes(canvas)
         spaceInsertionY?.let {
             val bottom = spaceHandleY()
             val centerX = width / 2f
@@ -600,6 +718,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             val sx = model.viewport.screenX(x); val sy = model.viewport.screenY(y)
             canvas.drawCircle(sx, sy, r, cursorPaint)
         }
+        drawScrollIndicators(canvas)
     }
     override fun performClick(): Boolean { super.performClick(); return true }
     override fun computeVerticalScrollRange() = (maxOf(model.contentBottom + 200f, model.viewport.bottom) * scale).toInt().coerceAtLeast(height)

@@ -36,6 +36,7 @@ data class EditorUi(
     val busy: Boolean = false,
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
+    val contentRevision: Long = 0,
 )
 class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageRecord?, val storageId: String) {
     constructor(ink: Stroke, storageId: String = UUID.randomUUID().toString()) : this(ink, null, storageId)
@@ -114,6 +115,8 @@ class EditorViewModel : ViewModel() {
         private set
     internal val resizableImage get() = selection.values.singleOrNull()?.image
     val viewport = Viewport()
+    private val mutableVisibleRegion = MutableStateFlow(StrokeIndex.Bounds(0f, 0f, Viewport.WIDTH, 1000f))
+    internal val visibleRegion = mutableVisibleRegion.asStateFlow()
     private val index = StrokeIndex<EditorStroke>()
     internal var canvasRevision = 0L
         private set
@@ -366,6 +369,12 @@ class EditorViewModel : ViewModel() {
         }
     }
     fun viewportChanged() { updateViewportOverlay(); enqueueSave(force = true) }
+    internal fun moveViewportFromPreview(left: Float, top: Float) {
+        if (mutableUi.value.busy || mutableWorkspace.value.working || !left.isFinite() || !top.isFinite()) return
+        viewport.restore(viewport.position.copy(left = left.coerceAtLeast(0f), top = top.coerceAtLeast(0f)))
+        updateViewportOverlay()
+        onCanvasChange?.invoke()
+    }
     internal fun transformViewport(oldX: Float, oldY: Float, newX: Float, newY: Float, factor: Float) {
         val zoom = viewport.position.zoom
         viewport.transform(oldX, oldY, newX, newY, factor)
@@ -510,6 +519,7 @@ class EditorViewModel : ViewModel() {
     internal fun defaultPaper(paper: NotePaper) = updateLibrary(mutableLibrary.value.value.copy(paper = paper))
     internal fun suppressPenGestures(enabled: Boolean) = updateLibrary(mutableLibrary.value.value.copy(suppressPenGestures = enabled))
     internal fun listGrid(grid: Boolean) = updateLibrary(mutableLibrary.value.value.copy(grid = grid))
+    internal fun previewOnRight(right: Boolean) = updateLibrary(mutableLibrary.value.value.copy(previewOnRight = right))
     internal fun strokeCache(mode: StrokeCacheMode) {
         updateLibrary(mutableLibrary.value.value.copy(strokeCache = mode))
         onCanvasChange?.invoke()
@@ -731,6 +741,7 @@ class EditorViewModel : ViewModel() {
     }
     internal fun updateViewportOverlay() {
         mutableZoomPercent.value = viewport.zoomPercent
+        mutableVisibleRegion.value = StrokeIndex.Bounds(viewport.position.left, viewport.position.top, viewport.right, viewport.bottom)
         updateSelectionOverlay()
     }
     fun brushForPressure(supported: Boolean) = if (supported) brush else fixedWidthBrush
@@ -777,6 +788,7 @@ class EditorViewModel : ViewModel() {
             temporaryEraser = penButton.held,
             temporaryLasso = penButton.lassoHeld,
             strokes = edits.entries.size,
+            contentRevision = edits.revision,
             busy = edits.busy || selectionWorking || selectionGesture,
             canUndo = edits.canUndo && !selectionWorking && !selectionGesture,
             canRedo = edits.canRedo && !selectionWorking && !selectionGesture,
