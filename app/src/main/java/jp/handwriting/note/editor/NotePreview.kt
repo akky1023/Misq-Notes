@@ -94,9 +94,9 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
             val contentModifier = Modifier.fillMaxSize()
             if (starsOnly) StarRowsPreview(model, document, visibleRegion, ui.busy || workspace.working, starState, contentModifier)
             else WholeNotePreview(model, document, visibleRegion, ui.busy || workspace.working, state, contentModifier)
+            }
             PreviewStarButton(starsOnly, { starsOnly = !starsOnly },
                 Modifier.align(if (onRight) AbsoluteAlignment.BottomRight else AbsoluteAlignment.BottomLeft).padding(8.dp))
-            }
         }
     }
 }
