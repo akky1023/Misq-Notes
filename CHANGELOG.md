@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/akky1023/Misq-Notes/compare/v0.3.0...v0.3.1) (2026-10-28)
+
+
+### 修正
+
+* ハンドルの位置・プレビュ画面の横幅を記憶する ([ff38688](https://github.com/akky1023/Misq-Notes/commit/ff386881922f3765af42b0cd377f45d2716dee6e))
+* プレビュの開閉ボタン ([e1628e1](https://github.com/akky1023/Misq-Notes/commit/e1628e1211a8f69544cef39871b9602d5a28e5b9))
+* プレビュ画面のスリム化 ([1d0ad93](https://github.com/akky1023/Misq-Notes/commit/1d0ad93e0c492a1f5725e9d916521f9cd53dbf2d))
+* メモリ不足でクラッシュする問題 ([c06757a](https://github.com/akky1023/Misq-Notes/commit/c06757a254269eb6ec1cb00297139646044d686c))
+* 星タブをボタンに変更 ([f0c1580](https://github.com/akky1023/Misq-Notes/commit/f0c15802e6c08eba047475004953883b8f0d3a99))
+* 星ボタンのアニメーション ([1211faf](https://github.com/akky1023/Misq-Notes/commit/1211fafecd116e7b5de33977e23fd5dd7ed0bce0))
+
 ## [0.3.0](https://github.com/akky1023/Misq-Notes/compare/v0.2.0...v0.3.0) (2026-10-27)
 
 
