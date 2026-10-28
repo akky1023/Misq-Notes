@@ -8,7 +8,7 @@ plugins {
 
 val localSigning = rootProject.file(".signing/signing.properties")
 val signingValues = Properties().apply { if (localSigning.exists()) localSigning.inputStream().use { load(it) } }
-val releaseVersion = rootProject.file("version.txt").readText().trim()
+val releaseVersion = providers.gradleProperty("releaseVersion").orNull ?: rootProject.file("version.txt").readText().trim()
 require(Regex("\\d+\\.\\d+\\.\\d+").matches(releaseVersion)) { "version.txt must contain major.minor.patch" }
 val (majorVersion, minorVersion, patchVersion) = releaseVersion.split('.').map(String::toLong)
 require(minorVersion < 1000 && patchVersion < 1000) { "Minor and patch versions must be below 1000" }

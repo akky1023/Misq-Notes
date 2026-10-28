@@ -13,8 +13,21 @@ class MisqArchiveTest {
     private class Memory : PackedFiles {
         val files = linkedMapOf<String, ByteArray>()
         var failName: (String) -> Boolean = { false }
+        var rejectNoteReads = false
+        var failStream = false
         override fun names() = files.keys.toSet()
-        override fun read(name: String) = files.getValue(name).copyOf()
+        override fun read(name: String): ByteArray {
+            check(!rejectNoteReads || !(name.startsWith("blob-") || name.endsWith(".misq"))) { "Whole notebook read: $name" }
+            return files.getValue(name).copyOf()
+        }
+        override fun openRead(name: String) = files.getValue(name).inputStream()
+        override fun writeStream(name: String, input: java.io.InputStream) {
+            if (failStream) {
+                files[name] = byteArrayOf(input.read().toByte())
+                throw IOException("interrupted stream")
+            }
+            write(name, input.readBytes())
+        }
         override fun write(name: String, bytes: ByteArray) {
             if (failName(name)) throw IOException("interrupted")
             check(name !in files || files[name]!!.contentEquals(bytes))
@@ -74,5 +87,44 @@ class MisqArchiveTest {
         LibraryJson.write(file, settings.copy(folders = settings.folders.map { it.copy(name = "new") }))
         file.writeText("broken")
         assertEquals(settings.folders, LibraryPreferencesFile(File(root, "library.hwp")).read().folders)
+    }
+    @Test fun largeNotebookPublicationAndStartupRepairNeverReadWholeNotebookCopies() {
+        val (_, files) = fixture()
+        val note = files.entries.single { it.key.endsWith(".misq") }
+        note.value.outputStream().use { output ->
+            val block = ByteArray(8192) { (it % 251).toByte() }
+            repeat(3072) { output.write(block) }
+        }
+        val memory = Memory().apply { rejectNoteReads = true }
+        val directory = MisqArchiveDirectory(memory)
+        val archive = NotebookArchive(directory)
+        archive.commit(files)
+        val name = note.value.name
+        val hash = NotebookArchive.digest(note.value.readBytes())
+        assertEquals(hash, memory.digest(name))
+        // Startup with an unchanged revision still runs organize(). Repair a truncated view.
+        val restarted = NotebookArchive(MisqArchiveDirectory(memory))
+        val snapshot = restarted.capture(files)
+        assertNotNull(restarted.latestCaptured(snapshot))
+        memory.files[name] = byteArrayOf(1)
+        restarted.commitSnapshot(snapshot)
+        assertEquals(hash, memory.digest(name))
+        archive.commit(files)
+        assertEquals(hash, memory.digest(name))
+    }
+    @Test fun interruptedStreamLeavesCommittedRecoveryIntactAndViewCanBeRepaired() {
+        val (_, files) = fixture()
+        val memory = Memory().apply { failStream = true }
+        val directory = MisqArchiveDirectory(memory)
+        assertThrows(IOException::class.java) { NotebookArchive(directory).commit(files) }
+        val reopened = NotebookArchive(MisqArchiveDirectory(memory))
+        val revision = checkNotNull(reopened.latest())
+        val target = temp.newFolder()
+        reopened.restore(revision, target)
+        assertEquals("one", NoteFiles(File(target, "notes")).list().single().title)
+        memory.failStream = false
+        reopened.commit(files)
+        val note = files.entries.single { it.key.endsWith(".misq") }
+        assertEquals(NotebookArchive.digest(note.value.readBytes()), memory.digest(note.value.name))
     }
 }

@@ -10,6 +10,8 @@ internal class MisqDocumentFiles(resolver: ContentResolver, tree: Uri) : PackedF
     private fun owner(name: String) = if (name.startsWith("blob-") || name.startsWith("revision-")) recovery else current
     override fun names() = current.names() + recovery.names()
     override fun read(name: String) = owner(name).read(name)
+    override fun openRead(name: String) = owner(name).openRead(name)
+    override fun writeStream(name: String, input: java.io.InputStream) = owner(name).writeStream(name, input)
     override fun write(name: String, bytes: ByteArray) = owner(name).write(name, bytes)
     override fun delete(name: String) = owner(name).delete(name)
 }

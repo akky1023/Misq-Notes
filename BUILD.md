@@ -44,6 +44,8 @@ APKの出力先とアプリの識別情報は次のとおりです。本番版�
 
 本番APKは`.signing/handwriting.p12`で署名します。形式はPKCS12、鍵のエイリアスは`handwriting`です。パスワードは環境変数`ANDROID_KEYSTORE_PASSWORD`を優先し、未設定の場合はローカルの`.signing/signing.properties`の`storePassword`を使います。
 
+端末にインストール済みの版と同じバージョンで修正版を検証する場合は、`-PreleaseVersion=0.3.0`のように指定できます。`version.txt`とリリース管理情報は変更せず、生成するAPKのバージョンだけを指定します。
+
 署名設定がない環境では未署名のAPKが生成されるため、インストール・配布前に自身の鍵で署名してください。既存アプリへの上書き更新には、同じapplicationIdと同じ署名鍵が必要です。
 
 署名鍵・パスワード・ローカル設定はGitへ追加しないでください。署名済みAPKの出力先は`app/build/outputs/apk/release/app-release.apk`です。
