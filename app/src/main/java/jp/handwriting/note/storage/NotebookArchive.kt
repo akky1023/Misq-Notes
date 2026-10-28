@@ -12,6 +12,7 @@ internal interface ArchiveDirectory {
     val recoveredIndex: Boolean get() = false
     fun names(): Set<String>
     fun read(name: String): ByteArray
+    fun matches(name: String, hash: String): Boolean = NotebookArchive.digest(read(name)) == hash
     fun readBatch(names: List<String>): List<ByteArray> = names.map(::read)
     fun visit(names: List<String>, accept: (String, ByteArray) -> Unit) {
         for (batch in names.chunked(4)) {
@@ -160,10 +161,10 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
         val refs = files.toSortedMap().mapValues { (_, blob) ->
             val hash = blob.hash
             val name = "blob-$hash"
-            if (name !in names || (hash !in verified && runCatching { digest(directory.read(name)) != hash }.getOrDefault(true))) {
+            if (name !in names || (hash !in verified && !runCatching { directory.matches(name, hash) }.getOrDefault(false))) {
                 val bytes = blob.bytes
                 directory.write(name, bytes)
-                check(digest(directory.read(name)) == hash) { AppMessages.text(R.string.storage_write_unverified) }
+                check(directory.matches(name, hash)) { AppMessages.text(R.string.storage_write_unverified) }
             }
             verified += hash
             hash
@@ -223,7 +224,8 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
                 require(input.readInt() == 0x484E4131)
                 val count = input.readInt(); require(count in 1..1_000_000)
                 val pairs = List(count) {
-                    val path = input.readUTF(); val hash = input.readUTF()
+                    val path = input.readUTF()
+                    val hash = input.readUTF()
                     require(validPath(path) && hash.matches(Regex("[a-f0-9]{64}")))
                     path to hash
                 }

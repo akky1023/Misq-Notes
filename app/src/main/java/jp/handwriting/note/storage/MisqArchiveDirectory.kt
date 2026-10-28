@@ -27,6 +27,8 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
     override fun read(name: String): ByteArray = staged[name] ?: if (name.startsWith("revision-")) {
         NotebookArchive.encode(refs(revisions.getValue(name)))
     } else files.read(name).also { require(NotebookArchive.digest(it) == name.removePrefix("blob-")) }
+    override fun matches(name: String, hash: String): Boolean = staged[name]?.let { NotebookArchive.digest(it) == hash }
+        ?: if (name.startsWith("blob-")) files.digest(name) == hash else super.matches(name, hash)
     override fun write(name: String, bytes: ByteArray) {
         require(ArchiveLayout.complete(name, bytes)); staged[name] = bytes
     }
@@ -43,7 +45,7 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         refs["presets.hwp"]?.let { json.put("presets", Base64.getEncoder().encodeToString(read("blob-$it"))) }
         // Recovery blobs are immutable. They also preserve both sides of a simultaneous writer.
         staged.filterKeys { it.startsWith("blob-") }.forEach { (name, bytes) ->
-            files.write(name, bytes); require(files.read(name).contentEquals(bytes))
+            files.write(name, bytes); require(files.digest(name) == NotebookArchive.digest(bytes))
         }
         checkHead()
         val bytes = checked(json)
@@ -53,7 +55,7 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         if (peers.size != 1) throw ArchiveConflictException()
         // These names are convenient current views. The immutable JSON above is the commit point.
         refs.filterKeys { it.endsWith(".misq") }.forEach { (path, hash) ->
-            replaceView(path.substringAfterLast('/'), read("blob-$hash"))
+            replaceNoteView(path.substringAfterLast('/'), hash)
         }
         replaceView("library.json", json.toString(2).toByteArray())
         staged.clear()
@@ -62,11 +64,22 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         // Never overwrite the committed recovery record; it remains authoritative if this fails.
         runCatching {
             val names = files.names()
-            if (name in names && files.read(name).contentEquals(bytes)) return
+            if (name in names && files.digest(name) == NotebookArchive.digest(bytes)) return
             if (name in names) files.delete(name)
             files.write(name, bytes)
-            require(files.read(name).contentEquals(bytes))
+            require(files.digest(name) == NotebookArchive.digest(bytes))
         }.getOrThrow()
+    }
+    private fun replaceNoteView(name: String, hash: String) {
+        // A notebook can exceed the remaining Android heap. Compare, copy and verify
+        // using bounded streams while the immutable recovery blob remains authoritative.
+        val names = files.names()
+        if (name in names && files.digest(name) == hash) return
+        val source = "blob-$hash"
+        require(files.digest(source) == hash)
+        if (name in names) files.delete(name)
+        files.openRead(source).use { files.writeStream(name, it) }
+        require(files.digest(name) == hash)
     }
     private fun checkHead() {
         if (files.names().filter { it.matches(REVISION_FILE) }.maxOrNull() != observedHead) throw ArchiveConflictException()
@@ -80,7 +93,7 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         if (keep.isEmpty()) return
         val current = parse(files.read(keep.first()))
         refs(current).filterKeys { it.endsWith(".misq") }.forEach { (path, hash) ->
-            replaceView(path.substringAfterLast('/'), files.read("blob-$hash"))
+            replaceNoteView(path.substringAfterLast('/'), hash)
         }
         replaceView("library.json", current.toString(2).toByteArray())
         commits.filter { it !in keep }.forEach { files.delete(it) }

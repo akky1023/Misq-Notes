@@ -2,6 +2,9 @@ package jp.handwriting.note.editor
 
 import android.graphics.Bitmap
 import android.graphics.RectF
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,9 +16,12 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.AbsoluteAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.draw.drawWithContent
@@ -26,6 +32,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.handwriting.note.AppMessages
@@ -43,15 +53,16 @@ private data class PreviewDocument(val entries: List<OrderedEdits.Entry<EditorSt
     val bottom: Float, val starIds: Set<String>, val rows: List<StarPreviewRows.Row>)
 
 @Composable
-internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier) {
+internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, onRight: Boolean = false,
+    renderContent: Boolean = true) {
     val ui by model.ui.collectAsStateWithLifecycle()
     val workspace by model.workspace.collectAsStateWithLifecycle()
     val visibleRegion by model.visibleRegion.collectAsStateWithLifecycle()
     val note = workspace.current ?: return
     var document by remember(note.id) { mutableStateOf<PreviewDocument?>(null) }
     val starCache = remember(note.id) { mutableMapOf<String, StrokeIndex.Bounds?>() }
-    LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy) {
-        if (ui.busy) return@LaunchedEffect
+    LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy, renderContent) {
+        if (ui.busy || !renderContent) return@LaunchedEffect
         delay(300)
         val entries = model.edits.snapshot()
         val bottom = maxOf(1000f, model.contentBottom + 24f)
@@ -78,16 +89,41 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier) 
         var starsOnly by remember { mutableStateOf(false) }
         val state = rememberLazyListState()
         val starState = rememberLazyListState()
-        Column(modifier) {
-            TabRow(selectedTabIndex = if (starsOnly) 1 else 0) {
-                Tab(selected = !starsOnly, onClick = { starsOnly = false },
-                    text = { Text(AppMessages.text(R.string.preview_tab_all), maxLines = 1) })
-                Tab(selected = starsOnly, onClick = { starsOnly = true },
-                    text = { Text(AppMessages.text(R.string.preview_tab_stars), maxLines = 1) })
-            }
-            val contentModifier = Modifier.fillMaxWidth().weight(1f)
+        Box(modifier) {
+            if (renderContent) {
+            val contentModifier = Modifier.fillMaxSize()
             if (starsOnly) StarRowsPreview(model, document, visibleRegion, ui.busy || workspace.working, starState, contentModifier)
             else WholeNotePreview(model, document, visibleRegion, ui.busy || workspace.working, state, contentModifier)
+            }
+            PreviewStarButton(starsOnly, { starsOnly = !starsOnly },
+                Modifier.align(if (onRight) AbsoluteAlignment.BottomRight else AbsoluteAlignment.BottomLeft).padding(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun PreviewStarButton(checked: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    val progress by animateFloatAsState(if (checked) 1f else 0f, tween(240), label = "previewStarFill")
+    val tint = MaterialTheme.colorScheme.onPrimaryContainer
+    FloatingActionButton(onClick = onClick, modifier = modifier.semantics {
+        contentDescription = AppMessages.text(R.string.preview_star_filter)
+        role = Role.Switch
+        toggleableState = ToggleableState(checked)
+    }) {
+        Canvas(Modifier.size(24.dp)) {
+            val radius = size.minDimension * (0.46f + 0.04f * kotlin.math.sin(progress * kotlin.math.PI).toFloat())
+            val star = Path().apply {
+                repeat(10) { index ->
+                    val angle = -kotlin.math.PI / 2 + index * kotlin.math.PI / 5
+                    val r = radius * if (index % 2 == 0) 1f else 0.45f
+                    val x = center.x + r * kotlin.math.cos(angle).toFloat()
+                    val y = center.y + r * kotlin.math.sin(angle).toFloat()
+                    if (index == 0) moveTo(x, y) else lineTo(x, y)
+                }
+                close()
+            }
+            drawPath(star, tint, alpha = progress)
+            drawPath(star, tint, style = Stroke(1.7.dp.toPx(), join = StrokeJoin.Round))
         }
     }
 }
@@ -102,7 +138,7 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
             Text(AppMessages.text(R.string.preview_no_stars), style = MaterialTheme.typography.bodySmall)
         }
     } else LazyColumn(modifier.semantics { contentDescription = AppMessages.text(R.string.preview_star_rows) },
-        state = state, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        state = state, contentPadding = PaddingValues(top = 8.dp, bottom = 80.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items(document.rows.size) { index ->
             val row = document.rows[index]
             Box(Modifier.fillMaxWidth().semantics {
@@ -112,7 +148,7 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
                 model.moveViewportFromPreview(visibleRegion.left, ((row.top + row.bottom - height) / 2f).coerceAtLeast(0f))
                 model.viewportChanged()
             }) {
-                PreviewBand(document, row.top, row.bottom, visibleRegion)
+                PreviewBand(document, row.top, row.bottom, visibleRegion, showViewport = false)
             }
         }
     }
@@ -173,7 +209,7 @@ private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?,
                     }
                 }
             },
-            state = state, horizontalAlignment = Alignment.CenterHorizontally) {
+            state = state, contentPadding = PaddingValues(bottom = 80.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             document?.let { snapshot ->
                 // Only visible bands allocate bitmaps, even for very long documents.
                 val previewBottom = maxOf(snapshot.bottom, visibleRegion.bottom)
@@ -188,7 +224,8 @@ private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?,
 }
 
 @Composable
-private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, visibleRegion: StrokeIndex.Bounds) {
+private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, visibleRegion: StrokeIndex.Bounds,
+    showViewport: Boolean = true) {
     val frameColor = MaterialTheme.colorScheme.primary
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
@@ -207,7 +244,7 @@ private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, vi
         Box(Modifier.drawWithContent {
             drawContent()
             val scale = size.width / Viewport.WIDTH
-            if (visibleRegion.bottom > top && visibleRegion.top < bottom) {
+            if (showViewport && visibleRegion.bottom > top && visibleRegion.top < bottom) {
                 val inset = 1.5.dp.toPx()
                 val origin = Offset(visibleRegion.left * scale + inset, (visibleRegion.top - top) * scale + inset)
                 val area = Size(((visibleRegion.right - visibleRegion.left) * scale - 2f * inset).coerceAtLeast(0f),

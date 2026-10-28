@@ -8,6 +8,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import android.os.SystemClock
 import android.widget.Toast
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -48,7 +50,12 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
     var paperDialog by rememberSaveable { mutableStateOf(false) }
     var optionsDialog by rememberSaveable { mutableStateOf(false) }
     var previewVisible by rememberSaveable(workspace.current?.id) { mutableStateOf(false) }
-    val previewFraction by animateFloatAsState(if (previewVisible) 1f else 0f, tween(220), label = "notePreviewVisibility")
+    var preferredPreviewWidth by rememberSaveable(library.value.previewWidthDp) { mutableFloatStateOf(library.value.previewWidthDp) }
+    var previewHandlePosition by rememberSaveable(library.value.previewHandlePosition) { mutableFloatStateOf(library.value.previewHandlePosition) }
+    var previewSwipeFraction by remember(workspace.current?.id, library.value.previewOnRight) { mutableStateOf<Float?>(null) }
+    val animatedPreviewFraction by animateFloatAsState(previewSwipeFraction ?: if (previewVisible) 1f else 0f,
+        if (previewSwipeFraction != null) snap() else tween(220), label = "notePreviewVisibility")
+    val previewFraction = previewSwipeFraction ?: animatedPreviewFraction
     var optionsAnchor by remember { mutableStateOf<IntRect?>(null) }
     var toolbarDock by remember { mutableStateOf(ToolbarDock(0.5f, 0f, DockEdge.TOP)) }
     val context = LocalContext.current
@@ -76,7 +83,11 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
         val importDocument = rememberDocumentImporter(model)
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-                val fullPreviewWidth = (maxWidth * 0.22f).coerceAtMost(200.dp)
+                val density = LocalDensity.current
+                val minimumPreviewWidth = minOf(80.dp, maxWidth * 0.25f)
+                val maximumPreviewWidth = maxOf(minimumPreviewWidth, minOf(maxWidth * 0.65f, maxWidth - 200.dp))
+                val fullPreviewWidth = (preferredPreviewWidth.takeIf { it > 0f }?.dp ?: (maxWidth * 0.22f).coerceAtMost(200.dp))
+                    .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
                 val previewWidth = fullPreviewWidth * previewFraction
                 Box(Modifier.fillMaxSize().padding(
                     start = if (library.value.previewOnRight) 0.dp else previewWidth,
@@ -149,13 +160,16 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         .wrapContentWidth(if (library.value.previewOnRight) Alignment.Start else Alignment.End, unbounded = true)
                         .requiredWidth(fullPreviewWidth).fillMaxHeight(), color = MaterialTheme.colorScheme.surfaceContainer) {
                         Box {
-                            NotePreview(model, Modifier.fillMaxSize().padding(top = 72.dp, start = 8.dp, end = 8.dp, bottom = 16.dp))
+                            NotePreview(model, Modifier.fillMaxSize(),
+                                onRight = library.value.previewOnRight, renderContent = previewSwipeFraction == null && previewFraction == 1f)
                             VerticalDivider(Modifier.align(if (library.value.previewOnRight) Alignment.CenterStart else Alignment.CenterEnd).fillMaxHeight())
                         }
                     }
                     }
                 }
-                Surface(Modifier.align(Alignment.TopStart).padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
+                Surface(Modifier.align(Alignment.TopStart)
+                    .padding(start = if (library.value.previewOnRight) 0.dp else previewWidth)
+                    .padding(8.dp), shape = RoundedCornerShape(28.dp), shadowElevation = 3.dp) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onNotes, modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.back_to_notes) }) {
                             Icon(ToolbarIcons.Back, null)
@@ -163,12 +177,36 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         IconButton(onClick = { optionsDialog = true }, modifier = Modifier.editorPopoverAnchor { optionsAnchor = it }.semantics { contentDescription = AppMessages.text(R.string.note_settings) }) {
                             Icon(ToolbarIcons.Settings, null)
                         }
-                        IconToggleButton(checked = previewVisible, onCheckedChange = { previewVisible = it },
-                            modifier = Modifier.semantics { contentDescription = AppMessages.text(R.string.note_preview) }) {
-                            Icon(ToolbarIcons.Preview, null)
-                        }
                     }
                 }
+                val handleTravel = (maxHeight - 80.dp).coerceAtLeast(0.dp)
+                PreviewHandle(visible = previewVisible, onRight = library.value.previewOnRight, openProgress = previewFraction,
+                    onToggle = { previewVisible = !previewVisible },
+                    onAdjustmentEnd = { model.previewLayout(preferredPreviewWidth, previewHandlePosition) },
+                    onSwipeStart = { previewSwipeFraction = previewFraction },
+                    onSwipe = { delta ->
+                        val width = with(density) { fullPreviewWidth.toPx() }
+                        if (width > 0f) previewSwipeFraction = ((previewSwipeFraction ?: previewFraction) + delta / width).coerceIn(0f, 1f)
+                    },
+                    onSwipeEnd = { target ->
+                        if (target != null) previewVisible = target
+                        previewSwipeFraction = null
+                    },
+                    onResize = { delta ->
+                        val width = (preferredPreviewWidth.takeIf { it > 0f }?.dp ?: fullPreviewWidth)
+                            .coerceIn(minimumPreviewWidth, maximumPreviewWidth)
+                        preferredPreviewWidth = (width.value + with(density) { delta.toDp().value })
+                            .coerceIn(minimumPreviewWidth.value, maximumPreviewWidth.value)
+                    },
+                    onMove = { delta ->
+                        val travel = with(density) { handleTravel.toPx() }
+                        if (travel > 0f) previewHandlePosition = (previewHandlePosition + delta / travel).coerceIn(0f, 1f)
+                    },
+                    modifier = Modifier.align(Alignment.TopStart)
+                        .offset(x = (if (library.value.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * previewFraction
+                            else previewWidth - 24.dp * previewFraction)
+                            .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp)), y = handleTravel * previewHandlePosition)
+                        .size(width = 48.dp, height = 80.dp))
             }
         }
     CompositionLocalProvider(LocalEditorPopoverAnchor provides optionsAnchor) {

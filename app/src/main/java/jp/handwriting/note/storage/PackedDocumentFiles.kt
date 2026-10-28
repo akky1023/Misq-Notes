@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 /** Only enumerates packed-v1; the old per-stroke directories remain untouched for rollback. */
 internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String = "packed-v1") : PackedFiles {
@@ -30,7 +31,8 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         }
         return parent
     }
-    override fun read(name: String): ByteArray = checkNotNull(resolver.openInputStream(known.getValue(name))).use { input ->
+    override fun openRead(name: String): InputStream = checkNotNull(resolver.openInputStream(known.getValue(name)))
+    override fun read(name: String): ByteArray = openRead(name).use { input ->
         val output = ByteArrayOutputStream(); val buffer = ByteArray(8192)
         while (true) {
             val count = input.read(buffer); if (count < 0) break
@@ -40,10 +42,14 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         output.toByteArray()
     }
     override fun write(name: String, bytes: ByteArray) {
-        if (name in known) { check(read(name).contentEquals(bytes)); return }
+        if (name in known) { check(digest(name) == NotebookArchive.digest(bytes)); return }
+        bytes.inputStream().use { writeStream(name, it) }
+    }
+    override fun writeStream(name: String, input: InputStream) {
+        check(name !in known)
         if (folder == null) folder = checkNotNull(locate(true))
         val uri = checkNotNull(DocumentsContract.createDocument(resolver, checkNotNull(folder), "application/octet-stream", name))
-        checkNotNull(resolver.openOutputStream(uri, "w")).use { it.write(bytes); it.flush() }
+        checkNotNull(resolver.openOutputStream(uri, "w")).use { output -> input.copyTo(output, 8192); output.flush() }
         known[name] = uri
     }
     override fun delete(name: String) { known[name]?.let { check(DocumentsContract.deleteDocument(resolver, it)); known.remove(name) } }

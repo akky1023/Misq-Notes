@@ -36,7 +36,7 @@ class StarRowsPreviewTest {
         return EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), 0xFF202B33.toInt(), 3f, 0.1f), inputs))
     }
 
-    @Test fun tabGroupsStarsJumpsToOriginalRowAndUpdatesAfterDeletion(): Unit = runBlocking {
+    @Test fun floatingButtonGroupsStarsJumpsToOriginalRowAndUpdatesAfterDeletion(): Unit = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "star-rows-${UUID.randomUUID()}")
         val store = ViewModelStore()
@@ -74,7 +74,24 @@ class StarRowsPreviewTest {
                     instrumentation.waitForIdleSync()
                 }
                 click(AppMessages.text(R.string.note_preview), true)
-                click(AppMessages.text(R.string.preview_tab_stars))
+                val filter = AppMessages.text(R.string.preview_star_filter)
+                assertFalse(get(filter).isChecked)
+                fun filterCenterPixel(name: String): Int {
+                    SystemClock.sleep(300) // Let the fill animation reach its endpoint.
+                    val bounds = Rect().also(get(filter)::getBoundsInScreen)
+                    val shot = checkNotNull(automation.takeScreenshot())
+                    return try {
+                        File(instrumentation.targetContext.cacheDir, name).outputStream().use {
+                            shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                        }
+                        shot.getPixel(bounds.centerX(), bounds.centerY())
+                    } finally { shot.recycle() }
+                }
+                val outlinedCenter = filterCenterPixel("codex-preview-star-off.png")
+                click(filter)
+                assertTrue(get(filter).isChecked)
+                assertNotEquals("Enabling the filter must fill the star", outlinedCenter,
+                    filterCenterPixel("codex-preview-star-on.png"))
                 val first = AppMessages.text(R.string.preview_star_row, 1)
                 val second = AppMessages.text(R.string.preview_star_row, 2)
                 get(first)
@@ -145,9 +162,13 @@ class StarRowsPreviewTest {
                 assertTrue("Tap jumps to the original distant row", model.viewport.position.top > 3000f)
                 assertEquals(zoom, model.viewport.position.zoom, 0f)
                 assertEquals(revision, model.edits.revision)
-                click(AppMessages.text(R.string.preview_tab_all))
+                click(filter)
+                assertFalse(get(filter).isChecked)
+                assertEquals("Disabling the filter must restore the outlined star", outlinedCenter,
+                    filterCenterPixel("codex-preview-star-off-again.png"))
                 get(AppMessages.text(R.string.note_preview), false)
-                click(AppMessages.text(R.string.preview_tab_stars))
+                click(filter)
+                assertTrue(get(filter).isChecked)
                 get(second)
                 withContext(Dispatchers.Main) { model.edits.delete(model.edits.snapshot().map { it.id }.toSet()) }
                 get(AppMessages.text(R.string.preview_no_stars))

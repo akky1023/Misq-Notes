@@ -190,6 +190,11 @@ class NotePreviewTest {
                 val left = Rect().also(get(label)::getBoundsInScreen)
                 assertTrue(canvasBounds().width() < fullWidth)
                 assertTrue("Left preview must be outside the canvas", left.right <= canvasBounds().left)
+                val filterLabel = AppMessages.text(R.string.preview_star_filter)
+                val leftFilter = Rect().also(get(filterLabel, true)::getBoundsInScreen)
+                assertTrue("Star button must be at the lower left of the preview", leftFilter.centerX() < left.centerX() &&
+                    leftFilter.centerY() > left.top + left.height() * 0.75f && left.contains(leftFilter))
+                assertFalse(get(filterLabel, true).isChecked)
                 assertTrue(get(label, true).isChecked)
                 val previewDeadline = SystemClock.uptimeMillis() + 8000
                 while (!get(label).isScrollable && SystemClock.uptimeMillis() < previewDeadline) SystemClock.sleep(50)
@@ -343,6 +348,9 @@ class NotePreviewTest {
                 val right = Rect().also(get(label)::getBoundsInScreen)
                 assertTrue("Preview should move to the right: $left -> $right", right.left > left.right)
                 assertTrue("Right preview must be outside the canvas", canvasBounds().right <= right.left)
+                val rightFilter = Rect().also(get(filterLabel, true)::getBoundsInScreen)
+                assertTrue("Star button must be at the lower right of the preview", rightFilter.centerX() > right.centerX() &&
+                    rightFilter.centerY() > right.top + right.height() * 0.75f && right.contains(rightFilter))
                 repeat(3) {
                     get(label).performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
                     SystemClock.sleep(300)
