@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity android:name=".ConflictFixtureActivity" android:exported="false" />
         <activity android:name=".ProbeActivity" android:exported="false" />
         <activity android:name=".PerformanceActivity" android:exported="false" />
         <activity android:name=".ExperimentActivity" android:exported="true" />

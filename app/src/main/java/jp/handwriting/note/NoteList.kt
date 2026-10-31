@@ -175,6 +175,7 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
                 }
                 ToolAction(if (data.grid) AppMessages.text(R.string.list_view) else AppMessages.text(R.string.grid_view), if (data.grid) ToolbarIcons.List else ToolbarIcons.Grid, !working) { model.listGrid(!data.grid) }
                 ToolAction(AppMessages.text(R.string.settings), ToolbarIcons.Settings, !working, onClick = onSettings)
+                ConflictsButton(model, enabled = !working)
             }
             if (current != null) Text(data.path(current.id), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 8.dp))
             library.error?.let { Text(it, color = MaterialTheme.colorScheme.error); TextButton(onClick = model::retryLibrary) { Text(AppMessages.text(R.string.retry)) } }
@@ -296,6 +297,7 @@ private fun NoteTile(note: NoteSummary, grid: Boolean, working: Boolean, model: 
                         }
                     }
                 }
+                if (note.provisional) Text(AppMessages.text(R.string.note_provisional), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                 Timestamp(note.createdAt, ToolbarIcons.Created, AppMessages.text(R.string.created_time))
                 Timestamp(note.updatedAt, ToolbarIcons.Updated, AppMessages.text(R.string.updated_time))
                 note.problem?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }

@@ -4,6 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OrderedEditsTest {
+    @Test fun externalAppendSurvivesLocalUndoAndRedo() {
+        val doc = OrderedEdits<String>()
+        doc.addAll(listOf("local"))
+        doc.appendExternal(listOf(OrderedEdits.Entry(2, "remote")), 3)
+        doc.undo(); assertEquals(listOf("remote"), doc.entries.toList())
+        doc.redo(); assertEquals(listOf("local", "remote"), doc.entries.toList())
+        assertEquals(3L, doc.nextEntryId)
+    }
     @Test fun pastedGroupPreservesOrderAndIsOneUndoStep() {
         val doc = OrderedEdits<String>()
         doc.addAll(listOf("existing"))

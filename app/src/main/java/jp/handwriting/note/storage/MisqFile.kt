@@ -10,8 +10,12 @@ import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
+internal data class NoteFileStamp(val size: Long, val modified: java.nio.file.attribute.FileTime, val identity: Any?)
+internal fun File.noteStamp(): NoteFileStamp = Files.readAttributes(toPath(), java.nio.file.attribute.BasicFileAttributes::class.java)
+    .let { NoteFileStamp(it.size(), it.lastModifiedTime(), it.fileKey()) }
+
 /** Append-only payloads and two checksummed commit slots. A preview never decodes stroke data. */
-internal class MisqFile(val file: File) {
+internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = false) {
     private var cachedStamp: Pair<Long, Long>? = null
     private var cachedIndexes: List<Index>? = null
     internal data class Record(val offset: Long, val size: Int, val hash: String)
@@ -64,6 +68,17 @@ internal class MisqFile(val file: File) {
         } catch (error: Exception) { throw IOException("Invalid Misq note: ${file.name}", error) }
     }
     internal fun index() = indexes().first()
+    /** Stable note content identity, excluding display preferences and disposable previews. */
+    internal fun contentKey(): String {
+        val index = index()
+        val manifest = index.manifest
+        val content = manifest.copy(info = manifest.info.copy(updatedAt = 0,
+            position = jp.handwriting.note.editor.ViewPosition(), color = 0xFF202B33.toInt(), size = 3f))
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(codec.encodeManifest(content))
+        manifest.strokes.forEach { digest.update(index.records.getValue(it.storageId).hash.toByteArray(Charsets.US_ASCII)) }
+        return manifest.info.id + ":" + digest.digest().joinToString("") { "%02x".format(it) }
+    }
     fun readManifest(): ReadManifest {
         val index = index()
         // A higher committed slot with a damaged body means the previous generation was recovered.
@@ -99,7 +114,7 @@ internal class MisqFile(val file: File) {
                     val json = JSONObject(String(record(input, slot.summary), Charsets.UTF_8))
                     val id = json.getString("id")
                     val manifest = codec.decodeManifest(id, Base64.getDecoder().decode(json.getString("manifest")))
-                    require(id == file.name.substringBefore('.'))
+                    require(readOnlyAlias || id == file.name.substringBefore('.'))
                     NoteSummary(id, manifest.info.title, manifest.info.updatedAt, json.getInt("strokes"),
                         createdAt = manifest.info.createdAt, paper = manifest.info.paper)
                 }
@@ -133,10 +148,12 @@ internal class MisqFile(val file: File) {
         cachedStamp = null; cachedIndexes = null
     }
     private fun open(): RandomAccessFile {
+        check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         file.parentFile!!.mkdirs()
         return RandomAccessFile(file, "rw").also { if (it.length() == 0L) { it.setLength(HEADER.toLong()); it.writeLong(MAGIC); it.fd.sync() } }
     }
     fun save(note: NoteManifest, encode: (String) -> ByteArray) {
+        check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         upgradeLegacy()
         if (file.exists() && file.length() > 0) {
             if (file.length() < HEADER || RandomAccessFile(file, "r").use { it.readLong() != MAGIC })
@@ -173,11 +190,57 @@ internal class MisqFile(val file: File) {
                 previous?.thumbnail, previous?.thumbnailKey, previous?.manifest))
         }
     }
+    /** Resolve every imported head, including rejected additions, so later sync cannot resurrect them. */
+    internal fun resolve(note: NoteManifest, sources: List<MisqFile>, selectedEntities: Map<Long, String>) {
+        check(!readOnlyAlias)
+        upgradeLegacy()
+        val previous = index()
+        require(note.info.id == previous.manifest.info.id)
+        codec.decodeManifest(note.info.id, codec.encodeManifest(note))
+        val indexes = sources.map { it.index() }
+        val combined = linkedMapOf<String, Event>()
+        indexes.flatMap { it.events }.forEach { event ->
+            val old = combined.put(event.version, event)
+            require(old == null || old == event)
+        }
+        val events = combined.values.toMutableList()
+        val histories = events.groupBy { it.entity }
+        val entities = previous.entities + selectedEntities
+        val selected = note.strokes.associate { selectedEntities.getValue(it.id) to it.storageId }
+        require(selected.size == note.strokes.size)
+        var order = events.maxOfOrNull { it.order } ?: 0L
+        val now = System.currentTimeMillis()
+        for (entity in (events.map { it.entity } + selected.keys).distinct()) {
+            val heads = frontier(histories[entity].orEmpty())
+            val blob = selected[entity]
+            if (heads.size == 1 && heads.single().blob == blob) continue
+            events += Event(UUID.randomUUID().toString(), entity, heads.map { it.version }, blob,
+                heads.firstOrNull()?.order ?: ++order, now)
+        }
+        open().use { output ->
+            val records = previous.records.toMutableMap()
+            val needed = events.mapNotNull { it.blob }.toSet() + selected.values
+            for (blob in needed) if (blob !in records) {
+                val source = sources.first { blob in it.index().records }
+                records[blob] = append(output, source.stroke(blob))
+            }
+            commit(output, Index(previous.generation + 1, note, records, events, entities,
+                previousManifest = previous.manifest))
+        }
+    }
     fun saveThumbnail(png: ByteArray) {
+        check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         upgradeLegacy()
         val index = index()
         open().use { output -> commit(output, index.copy(generation = index.generation + 1,
             thumbnail = append(output, png), thumbnailKey = key(index.manifest))) }
+    }
+    /** Preserve original timestamps when preparing an imported history or a test fixture. */
+    internal fun preserveEventTimes(times: Map<String, Long>) {
+        check(!readOnlyAlias)
+        val current = index()
+        open().use { output -> commit(output, current.copy(generation = current.generation + 1,
+            events = current.events.map { event -> event.copy(at = times[event.entity] ?: event.at) })) }
     }
     private fun upgradeLegacy() {
         if (file.exists() && file.length() >= 8 && RandomAccessFile(file, "r").use { it.readLong() == LEGACY_MAGIC }) rewrite(index())
@@ -191,6 +254,7 @@ internal class MisqFile(val file: File) {
     }
     /** Retain tombstones/causality; only obsolete payloads and old index bodies are compacted. */
     fun compactIfNeeded() {
+        check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         val index = index()
         val live = index.records.values.sumOf { it.size.toLong() } + (index.thumbnail?.size ?: 0) +
             encode(index).toString().toByteArray().size * 2L
@@ -199,6 +263,7 @@ internal class MisqFile(val file: File) {
         rewrite(index)
     }
     internal fun rewrite(index: Index, other: MisqFile? = null) {
+        check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         val temporary = File(file.path + ".compact")
         temporary.delete()
         try {
@@ -245,7 +310,7 @@ internal class MisqFile(val file: File) {
         require(obj.getInt("format") == 1)
         fun uuid(value: String) = value.also { require(UUID.fromString(it).toString() == it) }
         val note = codec.decodeManifest(uuid(obj.getString("id")), Base64.getDecoder().decode(obj.getString("manifest")))
-        require(file.name.substringBefore('.') == note.info.id || file.name.endsWith(".compact") || file.name.endsWith(".tmp"))
+        require(readOnlyAlias || file.name.substringBefore('.') == note.info.id || file.name.endsWith(".compact") || file.name.endsWith(".tmp"))
         val records = obj.getJSONObject("records").let { value -> value.keys().asSequence().associate { uuid(it) to recordJson(value.getJSONObject(it)) } }
         val events = obj.getJSONArray("events").let { value -> List(value.length()) { i ->
             val event = value.getJSONObject(i); val parents = event.getJSONArray("parents")

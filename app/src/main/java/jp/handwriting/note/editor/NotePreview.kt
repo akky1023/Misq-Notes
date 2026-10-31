@@ -40,7 +40,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
-import jp.handwriting.note.storage.NotePaper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -49,8 +48,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlin.math.ceil
 
-private data class PreviewDocument(val entries: List<OrderedEdits.Entry<EditorStroke>>, val paper: NotePaper,
-    val bottom: Float, val starIds: Set<String>, val rows: List<StarPreviewRows.Row>)
+internal class PreviewDocument(val bottom: Float, val rows: List<StarPreviewRows.Row>,
+    val render: suspend (RectF) -> Bitmap)
 
 @Composable
 internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, onRight: Boolean = false,
@@ -82,22 +81,33 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
                 starCache[stroke.storageId]
             }
             val starIds = entries.filter { starCache[it.value.storageId] != null }.mapTo(mutableSetOf()) { it.value.storageId }
-            PreviewDocument(entries, note.paper, bottom, starIds, StarPreviewRows.group(stars))
+            PreviewDocument(bottom, StarPreviewRows.group(stars)) { bounds ->
+                NoteExport.preview(entries.map { it.value }, note.paper, bounds, enlargedStrokes = starIds)
+            }
         }
     }
     key(note.id) {
-        var starsOnly by remember { mutableStateOf(false) }
-        val state = rememberLazyListState()
-        val starState = rememberLazyListState()
-        Box(modifier) {
-            if (renderContent) {
+        NotePreview(document, visibleRegion, ui.busy || workspace.working, modifier, onRight, renderContent,
+            onMove = model::moveViewportFromPreview, onMoveEnd = model::viewportChanged)
+    }
+}
+
+/** Shared by the live editor and the immutable merge review. Navigation belongs to the caller. */
+@Composable
+internal fun NotePreview(document: PreviewDocument?, visibleRegion: StrokeIndex.Bounds, busy: Boolean,
+    modifier: Modifier = Modifier, onRight: Boolean = false, renderContent: Boolean = true,
+    onMove: (Float, Float) -> Unit, onMoveEnd: () -> Unit = {}) {
+    var starsOnly by remember { mutableStateOf(false) }
+    val state = rememberLazyListState()
+    val starState = rememberLazyListState()
+    Box(modifier) {
+        if (renderContent) {
             val contentModifier = Modifier.fillMaxSize()
-            if (starsOnly) StarRowsPreview(model, document, visibleRegion, ui.busy || workspace.working, starState, contentModifier)
-            else WholeNotePreview(model, document, visibleRegion, ui.busy || workspace.working, state, contentModifier)
-            }
-            PreviewStarButton(starsOnly, { starsOnly = !starsOnly },
-                Modifier.align(if (onRight) AbsoluteAlignment.BottomRight else AbsoluteAlignment.BottomLeft).padding(8.dp))
+            if (starsOnly) StarRowsPreview(document, visibleRegion, busy, starState, contentModifier, onMove, onMoveEnd)
+            else WholeNotePreview(document, visibleRegion, busy, state, contentModifier, onMove, onMoveEnd)
         }
+        PreviewStarButton(starsOnly, { starsOnly = !starsOnly },
+            Modifier.align(if (onRight) AbsoluteAlignment.BottomRight else AbsoluteAlignment.BottomLeft).padding(8.dp))
     }
 }
 
@@ -129,8 +139,8 @@ private fun PreviewStarButton(checked: Boolean, onClick: () -> Unit, modifier: M
 }
 
 @Composable
-private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, visibleRegion: StrokeIndex.Bounds,
-    busy: Boolean, state: LazyListState, modifier: Modifier) {
+private fun StarRowsPreview(document: PreviewDocument?, visibleRegion: StrokeIndex.Bounds,
+    busy: Boolean, state: LazyListState, modifier: Modifier, onMove: (Float, Float) -> Unit, onMoveEnd: () -> Unit) {
     if (document == null) {
         Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) }
     } else if (document.rows.isEmpty()) {
@@ -145,8 +155,8 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
                 contentDescription = AppMessages.text(R.string.preview_star_row, index + 1)
             }.clickable(enabled = !busy) {
                 val height = visibleRegion.bottom - visibleRegion.top
-                model.moveViewportFromPreview(visibleRegion.left, ((row.top + row.bottom - height) / 2f).coerceAtLeast(0f))
-                model.viewportChanged()
+                onMove(visibleRegion.left, ((row.top + row.bottom - height) / 2f).coerceAtLeast(0f))
+                onMoveEnd()
             }) {
                 PreviewBand(document, row.top, row.bottom, visibleRegion, showViewport = false)
             }
@@ -155,11 +165,13 @@ private fun StarRowsPreview(model: EditorViewModel, document: PreviewDocument?, 
 }
 
 @Composable
-private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?, visibleRegion: StrokeIndex.Bounds,
-    busy: Boolean, state: LazyListState, modifier: Modifier) {
+private fun WholeNotePreview(document: PreviewDocument?, visibleRegion: StrokeIndex.Bounds,
+    busy: Boolean, state: LazyListState, modifier: Modifier, onMove: (Float, Float) -> Unit, onMoveEnd: () -> Unit) {
     var dragging by remember { mutableStateOf(false) }
     val currentRegion by rememberUpdatedState(visibleRegion)
     val currentBusy by rememberUpdatedState(busy)
+    val currentMove by rememberUpdatedState(onMove)
+    val currentMoveEnd by rememberUpdatedState(onMoveEnd)
     val documentBottom by rememberUpdatedState(document?.bottom ?: 1000f)
     val density = LocalDensity.current
     BoxWithConstraints(modifier) {
@@ -200,11 +212,11 @@ private fun WholeNotePreview(model: EditorViewModel, document: PreviewDocument?,
                                 change.consume()
                                 if (!change.pressed) break
                                 val delta = (change.position - down.position) / scale
-                                model.moveViewportFromPreview(region.left + delta.x, (region.top + delta.y).coerceIn(0f, maximumTop))
+                                currentMove(region.left + delta.x, (region.top + delta.y).coerceIn(0f, maximumTop))
                             }
                         } finally {
                             dragging = false
-                            model.viewportChanged()
+                            currentMoveEnd()
                         }
                     }
                 }
@@ -234,8 +246,7 @@ private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, vi
         failed = false
         try {
             bitmap = withContext(Dispatchers.Default) {
-                NoteExport.preview(document.entries.map { it.value }, document.paper, RectF(0f, top, Viewport.WIDTH, bottom),
-                    enlargedStrokes = document.starIds)
+                document.render(RectF(0f, top, Viewport.WIDTH, bottom))
             }
         } catch (e: CancellationException) { throw e }
         catch (_: Exception) { failed = true }

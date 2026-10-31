@@ -211,17 +211,19 @@ class NotePreviewTest {
                     assertEquals(Viewport.WIDTH / position.zoom, region.right - region.left, 0.01f)
                     val deadline = SystemClock.uptimeMillis() + 8000
                     var matches = false
+                    var observedFrame = Rect()
                     do {
                         automation.takeScreenshot()?.let { shot ->
                             try {
                                 val frame = Rect(Int.MAX_VALUE, Int.MAX_VALUE, 0, 0)
                                 for (y in left.top until minOf(left.bottom, shot.height)) for (x in left.left until left.right) {
                                     val pixel = shot.getPixel(x, y)
-                                    if (isFramePixel(pixel)) {
+                                    if (!leftFilter.contains(x, y) && isFramePixel(pixel)) {
                                         frame.left = minOf(frame.left, x); frame.right = maxOf(frame.right, x)
                                         frame.top = minOf(frame.top, y); frame.bottom = maxOf(frame.bottom, y)
                                     }
                                 }
+                                observedFrame = Rect(frame)
                                 val scale = left.width() / Viewport.WIDTH
                                 matches = kotlin.math.abs(frame.left - (left.left + region.left * scale)) < 8 &&
                                     kotlin.math.abs(frame.right - (left.left + region.right * scale)) < 8 &&
@@ -231,7 +233,12 @@ class NotePreviewTest {
                         }
                         if (!matches) SystemClock.sleep(100)
                     } while (!matches && SystemClock.uptimeMillis() < deadline)
-                    assertTrue("Preview rectangle must follow viewport $position, including tile boundaries", matches)
+                    if (!matches) automation.takeScreenshot()?.let { shot ->
+                        try { File(instrumentation.targetContext.cacheDir, "codex-preview-frame-failure.png").outputStream().use {
+                            shot.compress(Bitmap.CompressFormat.PNG, 100, it)
+                        } } finally { shot.recycle() }
+                    }
+                    assertTrue("Preview rectangle must follow viewport $position, region=$region pane=$left observed=$observedFrame", matches)
                 }
                 checkViewportFrame(ViewPosition(2f, 200f, 900f))
                 checkViewportFrame(ViewPosition(4f, 300f, 200f))

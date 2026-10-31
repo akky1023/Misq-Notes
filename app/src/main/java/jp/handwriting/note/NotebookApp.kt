@@ -21,9 +21,19 @@ import jp.handwriting.note.editor.*
 import jp.handwriting.note.storage.NoteSummary
 import java.text.DateFormat
 import java.util.Date
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.delay
 
 @Composable
 fun NotebookApp(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCanvasDisposed: (InkCanvasView) -> Unit, onNotes: () -> Unit) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(model, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) { model.refreshConflicts(); delay(10_000) }
+        }
+    }
     val state by model.workspace.collectAsStateWithLifecycle()
     val library by model.library.collectAsStateWithLifecycle()
     var settings by rememberSaveable { mutableStateOf(false) }
@@ -57,6 +67,7 @@ fun NotebookApp(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCan
                         awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
                     }, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 }
+                MergeReviewDialog(model)
             }
         }
     }

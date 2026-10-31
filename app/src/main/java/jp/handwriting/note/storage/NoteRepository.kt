@@ -34,11 +34,20 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     // Retain Ink's outline cache between saves instead of rebuilding the entire preview per pen lift.
     private val thumbnailRenderer by lazy { CanvasStrokeRenderer.create() }
     private var recent: LoadedNote? = null
+    private val provisionalLoaded = mutableMapOf<String, NoteManifest>()
+    private fun provisional(id: String) = if (files.hasWorkingCopy(id)) null else
+        files.provisionalVersions()[id]?.first?.let { MisqFile(it, readOnlyAlias = true) }
+    private fun content(note: NoteManifest) = note.copy(info = note.info.copy(updatedAt = 0,
+        position = jp.handwriting.note.editor.ViewPosition(), color = 0, size = 0f))
     private val orphanSweeps = mutableMapOf<String, Int>()
-    @Synchronized fun list() = (listCache?.list(files::list) ?: files.list()).map { note ->
+    @Synchronized fun list(): List<NoteSummary> {
+        val provisional = files.provisionalVersions().mapValues { it.value.second }
+        return ((listCache?.list(files::list) ?: files.list()).filter { it.id !in provisional } + provisional.values)
+            .sortedByDescending { it.updatedAt }.map { note ->
         // Error labels follow the current app language even when the index predates a switch.
         if (note.problem == null) note else note.copy(title = AppMessages.text(R.string.unreadable_note),
             problem = AppMessages.text(R.string.note_data_read_failed))
+    }
     }
     private fun summary(note: NoteManifest) = NoteSummary(note.info.id, note.info.title, note.info.updatedAt,
         note.strokes.size, createdAt = note.info.createdAt, paper = note.info.paper,
@@ -53,11 +62,54 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         thumbnail(NoteSnapshot(created, emptyList()))
         return created
     }
-    @Synchronized fun rename(id: String, title: String) = persist {
+    @Synchronized internal fun copyConflict(store: NoteConflicts, conflict: NoteConflict, title: String): NoteManifest {
+        lateinit var manifest: NoteManifest
+        persist {
+            val clean = listCache?.changing()
+            manifest = store.copy(conflict, title)
+            listCache?.saved(summary(manifest), clean == true)
+        }
+        return manifest
+    }
+    @Synchronized internal fun saveMerge(write: (File) -> NoteManifest): NoteManifest {
+        lateinit var manifest: NoteManifest
+        persist {
+            val clean = listCache?.changing()
+            manifest = write(files.directory)
+            recent = null
+            thumbnailKeys.remove(manifest.info.id)
+            files.invalidateThumbnail(manifest.info.id)
+            listCache?.saved(summary(manifest), clean == true)
+        }
+        return manifest
+    }
+    @Synchronized internal fun autoMergeConflict(store: NoteConflicts, conflict: NoteConflict): NoteManifest? {
+        if (!store.canAutoMerge(conflict)) return null
+        var manifest: NoteManifest? = null
+        persist {
+            val clean = listCache?.changing()
+            manifest = store.autoMerge(conflict)
+            manifest?.let {
+                recent = null
+                files.invalidateThumbnail(it.info.id)
+                listCache?.saved(summary(it), clean == true)
+            }
+        }
+        return manifest
+    }
+    @Synchronized fun rename(id: String, title: String) {
+        if (provisional(id) != null) {
+            val loaded = load(id)
+            save(NoteSnapshot(loaded.manifest.copy(info = loaded.manifest.info.copy(title = NoteFiles.validTitle(title),
+                updatedAt = System.currentTimeMillis())), loaded.entries))
+            return
+        }
+        persist {
         val clean = listCache?.changing()
         files.rename(id, title)
         listCache?.saved(summary(files.read(id).manifest), clean == true)
         if (recent?.manifest?.info?.id == id) recent = null
+    }
     }
     @Synchronized fun delete(id: String) = persist {
         val clean = listCache?.changing()
@@ -66,6 +118,11 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         if (recent?.manifest?.info?.id == id) recent = null
     }
     @Synchronized fun preview(id: String): File {
+        if (provisional(id) != null) {
+            val loaded = load(id)
+            thumbnail(NoteSnapshot(loaded.manifest, loaded.entries), provisional = true)
+            return files.thumbnail(id)
+        }
         files.storedThumbnail(id)?.let { return it }
         val target = files.thumbnail(id)
         if (!files.thumbnailIsCurrent(id)) {
@@ -76,12 +133,25 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     }
     @Synchronized fun updatePreview(snapshot: NoteSnapshot) {
         // A delayed preview must not attach an older snapshot to a newer committed note.
-        if (files.read(snapshot.manifest.info.id).manifest == snapshot.manifest) thumbnail(snapshot)
+        if (provisional(snapshot.manifest.info.id) == null && files.read(snapshot.manifest.info.id).manifest == snapshot.manifest) thumbnail(snapshot)
     }
     @Synchronized fun save(snapshot: NoteSnapshot) {
         val strokes = snapshot.entries.associateBy { it.value.storageId }
         val id = snapshot.manifest.info.id
         val previous = recent?.takeIf { it.manifest.info.id == id }
+        val provisional = provisional(id)
+        if (provisional != null) {
+            val current = provisional.readManifest().manifest
+            check(provisionalLoaded[id]?.let { content(it) == content(current) } != false) { AppMessages.text(R.string.conflict_version_changed) }
+            // Viewport and pen preferences do not recreate a missing working file.
+            if (content(current) == content(snapshot.manifest)) {
+                recent = LoadedNote(snapshot.manifest, snapshot.entries, false)
+                return
+            }
+            publishProvisional(provisional, current, snapshot, strokes)
+            return
+        }
+        check(id !in provisionalLoaded) { AppMessages.text(R.string.conflict_version_changed) }
         if (previous == null || previous.entries.any { it.value.storageId !in strokes }) orphanSweeps[id] = 2
         persist {
             val clean = listCache?.changing()
@@ -96,7 +166,45 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         // Preview work belongs to the library's asynchronous preview request, never to closeNote.
         recent = LoadedNote(snapshot.manifest, snapshot.entries, false)
     }
+    private fun publishProvisional(source: MisqFile, expected: NoteManifest, snapshot: NoteSnapshot,
+        strokes: Map<String, OrderedEdits.Entry<EditorStroke>>) {
+        val id = expected.info.id
+        val destination = files.document(id).file
+        val temporary = File(files.directory, ".provisional-${java.util.UUID.randomUUID()}.tmp")
+        try {
+            source.file.inputStream().use { input -> FileOutputStream(temporary).use { output ->
+                input.copyTo(output, 65536); output.fd.sync()
+            } }
+            val target = MisqFile(temporary)
+            check(target.readManifest().manifest == expected && source.readManifest().manifest == expected) {
+                AppMessages.text(R.string.conflict_version_changed)
+            }
+            target.validate()
+            target.save(snapshot.manifest) { encodeStroke(strokes.getValue(it).value) }
+            target.validate()
+            persist {
+                val clean = listCache?.changing()
+                // Same-directory rename under the persistence lock; no REPLACE_EXISTING.
+                check(!destination.exists()) { AppMessages.text(R.string.conflict_version_changed) }
+                Files.move(temporary.toPath(), destination.toPath())
+                files.invalidateThumbnail(id)
+                listCache?.saved(summary(snapshot.manifest), clean == true)
+            }
+            provisionalLoaded.remove(id)
+            recent = LoadedNote(snapshot.manifest, snapshot.entries, false)
+        } finally { temporary.delete() }
+    }
     @Synchronized fun load(id: String): LoadedNote {
+        provisional(id)?.let { source ->
+            val manifest = source.readManifest().manifest
+            val loaded = LoadedNote(manifest, manifest.strokes.sortedBy { it.id }.map { ref ->
+                OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, source.stroke(ref.storageId)))
+            }, false)
+            provisionalLoaded[id] = manifest
+            recent = loaded
+            return loaded
+        }
+        provisionalLoaded.remove(id)
         val current = files.read(id)
         recent?.takeIf { it.manifest == current.manifest }?.let { return it.copy(recovered = it.recovered || current.recovered) }
         val loaded = try {
@@ -114,16 +222,18 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
             OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, files.stroke(manifest.info.id, ref.storageId)))
         }, recovered,
     )
-    private fun thumbnail(snapshot: NoteSnapshot) {
+    private fun thumbnail(snapshot: NoteSnapshot, provisional: Boolean = false) {
         val info = snapshot.manifest.info
         val entries = snapshot.entries.filter { entry -> entry.value.bounds?.let { it.xMax >= 0 && it.yMax >= 0 && it.xMin <= 1000 && it.yMin <= 1000 } == true }
         val previewPaper = NotePaper(color = info.paper.color)
         val key = previewPaper to entries.map { it.value.storageId }
         val target = files.thumbnail(info.id)
-        if (target.exists() && (thumbnailKeys[info.id] == key || (info.id !in thumbnailKeys && files.thumbnailIsCurrent(info.id)))) {
+        if (target.exists() && (thumbnailKeys[info.id] == key || (!provisional && info.id !in thumbnailKeys && files.thumbnailIsCurrent(info.id)))) {
             thumbnailKeys[info.id] = key
-            if (!files.thumbnailIsCurrent(info.id)) persist { files.markThumbnailCurrent(info.id) }
-            else files.markThumbnailCurrent(info.id)
+            if (!provisional) {
+                if (!files.thumbnailIsCurrent(info.id)) persist { files.markThumbnailCurrent(info.id) }
+                else files.markThumbnailCurrent(info.id)
+            }
             return
         }
         // A preview is a disposable cache; it must never prevent the note from being saved.
@@ -141,7 +251,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
                 check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs())
                 FileOutputStream(temporary).use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)); output.fd.sync() }
                 Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
-                persist { files.markThumbnailCurrent(info.id) }
+                if (!provisional) persist { files.markThumbnailCurrent(info.id) }
                 listCache?.thumbnail(info.id, target.path)
                 thumbnailKeys[info.id] = key
             } finally { bitmap.recycle() }

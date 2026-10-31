@@ -21,6 +21,9 @@ internal enum class NoteExportFormat(val extension: String, val mime: String) { 
 internal object NoteExport {
     /** Bounded bitmap for the complete document; never allocates an export-sized image. */
     suspend fun preview(strokes: List<EditorStroke>, paper: NotePaper, bounds: RectF = noteBounds(strokes),
+        enlargedStrokes: Set<String> = emptySet()): Bitmap = preview(strokes.asIterable(), paper, bounds, enlargedStrokes)
+
+    internal suspend fun preview(strokes: Iterable<EditorStroke>, paper: NotePaper, bounds: RectF,
         enlargedStrokes: Set<String> = emptySet()): Bitmap {
         val scale = minOf(360f / bounds.width(), 1200f / bounds.height())
         val bitmap = createBitmap(ceil(bounds.width() * scale).toInt().coerceAtLeast(1),
@@ -79,7 +82,7 @@ internal object NoteExport {
             document.writeTo(output)
         } finally { document.close() }
     }
-    private fun draw(canvas: Canvas, strokes: List<EditorStroke>, paper: NotePaper, bounds: RectF, scale: Float,
+    private fun draw(canvas: Canvas, strokes: Iterable<EditorStroke>, paper: NotePaper, bounds: RectF, scale: Float,
         quality: StrokeFidelityCache? = null, previewPaper: Boolean = false,
         enlargedStrokes: Set<String> = emptySet(), checkpoint: () -> Unit = {}) {
         val matrix = Matrix().apply { setValues(floatArrayOf(scale, 0f, -bounds.left * scale, 0f, scale, -bounds.top * scale, 0f, 0f, 1f)) }

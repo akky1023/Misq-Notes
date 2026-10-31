@@ -99,7 +99,9 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         commits.filter { it !in keep }.forEach { files.delete(it) }
         // Old blob copies are deliberately retained in the test format, pending safe compaction.
         val active = refs(parse(files.read(keep.first()))).keys.filter { it.endsWith(".misq") }.map { it.substringAfterLast('/') }.toSet()
-        names.filter { it.matches(NOTE) && it !in active }.forEach { files.delete(it) }
+        val owned = keep.flatMap { refs(parse(files.read(it))).keys }.filter { it.endsWith(".misq") }.map { it.substringAfterLast('/') }.toSet()
+        // Other tools may give a competing version another UUID filename. Unknown files are not garbage.
+        names.filter { it.matches(NOTE) && it in owned && it !in active }.forEach { files.delete(it) }
     }
     private fun refs(json: JSONObject) = json.getJSONObject("files").let { obj -> obj.keys().asSequence().associateWith { obj.getString(it) } }
     companion object {

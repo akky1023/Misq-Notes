@@ -9,6 +9,25 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class MisqArchiveTest {
+    @Test fun cleanupPreservesOtherToolsCopiesButRemovesExplicitlyDeletedOwnedNotes() {
+        val (_, sources) = fixture()
+        val memory = Memory()
+        val directory = MisqArchiveDirectory(memory)
+        val archive = NotebookArchive(directory)
+        archive.commit(sources)
+        val original = sources.keys.single { it.endsWith(".misq") }.substringAfterLast('/')
+        val payload = memory.files.getValue(original).copyOf()
+        val alias = java.util.UUID.randomUUID().toString() + ".misq"
+        memory.files[alias] = payload
+        memory.files["arbitrary renamed copy.misq"] = payload
+        directory.organize()
+        assertArrayEquals(payload, memory.files[alias])
+        archive.commit(sources.filterKeys { !it.endsWith(".misq") })
+        directory.organize()
+        assertFalse(memory.files.containsKey(original))
+        assertArrayEquals(payload, memory.files[alias])
+        assertArrayEquals(payload, memory.files["arbitrary renamed copy.misq"])
+    }
     @get:Rule val temp = TemporaryFolder()
     private class Memory : PackedFiles {
         val files = linkedMapOf<String, ByteArray>()
