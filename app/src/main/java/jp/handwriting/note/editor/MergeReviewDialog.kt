@@ -5,6 +5,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTransformGestures
@@ -26,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
@@ -117,41 +120,44 @@ private fun MergeMetadataScreen(session: MergeReviewSession, steps: List<MultiMe
                         @Composable fun Choice(source: Int, modifier: Modifier) {
                             val label = session.sourceLabel(source)
                             val info = session.multiPlan.indexes[source].manifest.info
-                            fun choose() { selected = HashMap(selected).apply { put(step.key, source) } }
-                            Card(onClick = ::choose, modifier = modifier, colors = CardDefaults.cardColors(
-                                containerColor = if (selected[step.key] == source) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer)) {
-                                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        RadioButton(selected[step.key] == source, onClick = ::choose,
-                                            modifier = Modifier.semantics { contentDescription = AppMessages.text(
-                                                if (isName) R.string.merge_metadata_name_choice else R.string.merge_metadata_paper_choice, label) })
+                            val chosen = selected[step.key] == source
+                            fun choose() { selected = HashMap(selected).apply {
+                                if (get(step.key) == source) remove(step.key) else put(step.key, source)
+                            } }
+                            Card(modifier = modifier.selectable(chosen, role = Role.RadioButton, onClick = ::choose).semantics {
+                                contentDescription = AppMessages.text(
+                                    if (isName) R.string.merge_metadata_name_choice else R.string.merge_metadata_paper_choice, label)
+                            }, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                                Box(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.heightIn(min = 96.dp).padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Text(label, style = MaterialTheme.typography.labelLarge)
-                                    }
-                                    if (isName) Text(info.title)
-                                    else {
-                                        val paper = info.paper
-                                        Canvas(Modifier.fillMaxWidth().height(130.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
-                                            val scale = size.width / 1000f
-                                            drawContext.canvas.nativeCanvas.apply {
-                                                save(); clipRect(0f, 0f, size.width, size.height); scale(scale, scale)
-                                                PaperRenderer.draw(this, paper, android.graphics.RectF(0f, 0f, 1000f, size.height / scale), scale)
-                                                restore()
+                                        if (isName) Text(info.title)
+                                        else {
+                                            val paper = info.paper
+                                            Canvas(Modifier.fillMaxWidth().height(130.dp).border(1.dp, MaterialTheme.colorScheme.outlineVariant)) {
+                                                val scale = size.width / 1000f
+                                                drawContext.canvas.nativeCanvas.apply {
+                                                    save(); clipRect(0f, 0f, size.width, size.height); scale(scale, scale)
+                                                    PaperRenderer.draw(this, paper, android.graphics.RectF(0f, 0f, 1000f, size.height / scale), scale)
+                                                    restore()
+                                                }
                                             }
+                                            Text(AppMessages.text(when (paper.pattern) {
+                                                PaperPattern.PLAIN -> R.string.paper_plain
+                                                PaperPattern.RULED -> R.string.paper_ruled
+                                                PaperPattern.GRID -> R.string.paper_grid
+                                                PaperPattern.DOTS -> R.string.paper_dots
+                                                PaperPattern.COLLEGE_RULED -> R.string.paper_college_ruled
+                                            }), style = MaterialTheme.typography.bodySmall)
                                         }
-                                        Text(AppMessages.text(when (paper.pattern) {
-                                            PaperPattern.PLAIN -> R.string.paper_plain
-                                            PaperPattern.RULED -> R.string.paper_ruled
-                                            PaperPattern.GRID -> R.string.paper_grid
-                                            PaperPattern.DOTS -> R.string.paper_dots
-                                            PaperPattern.COLLEGE_RULED -> R.string.paper_college_ruled
-                                        }), style = MaterialTheme.typography.bodySmall)
                                     }
+                                    if (chosen) MergeSelectionOverlay(Modifier.matchParentSize())
                                 }
                             }
                         }
-                        if (maxWidth >= 700.dp) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (maxWidth >= 700.dp) Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             session.multiPlan.indexes.indices.forEach { Choice(it, Modifier.weight(1f)) }
-                        } else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        } else Column(Modifier.fillMaxWidth().selectableGroup(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             session.multiPlan.indexes.indices.forEach { Choice(it, Modifier.fillMaxWidth()) }
                         }
                     }
@@ -393,28 +399,33 @@ internal fun StepPaper(session: MergeReviewSession, viewport: MergeViewport, sou
         }
     }, contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize()) }
-        if (selected && onSelect != null) Canvas(Modifier.fillMaxSize()) {
-            val length = minOf(size.width * 0.6f, size.height * 0.6f, 180.dp.toPx())
-            val left = (size.width - length) / 2f; val top = (size.height - length) / 2f
-            val check = android.graphics.Path().apply {
-                moveTo(left + length * 5f / 24f, top + length * 12f / 24f)
-                lineTo(left + length * 10f / 24f, top + length * 17f / 24f)
-                lineTo(left + length * 19f / 24f, top + length * 7f / 24f)
-            }
-            val cutout = android.graphics.Path()
-            android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                style = android.graphics.Paint.Style.STROKE; strokeWidth = length * 1.8f / 24f
-                strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
-            }.getFillPath(check, cutout)
-            val mask = android.graphics.Path().apply {
-                addRect(0f, 0f, size.width.toFloat(), size.height.toFloat(), android.graphics.Path.Direction.CW)
-                op(cutout, android.graphics.Path.Op.DIFFERENCE)
-            }
-            drawContext.canvas.nativeCanvas.drawPath(mask, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.argb(42, 35, 165, 75)
-            })
-        }
+        if (selected && onSelect != null) MergeSelectionOverlay(Modifier.fillMaxSize())
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         if (rendering) CircularProgressIndicator(Modifier.size(if (bitmap == null) 36.dp else 20.dp))
+    }
+}
+
+@Composable
+private fun MergeSelectionOverlay(modifier: Modifier) {
+    Canvas(modifier) {
+        val length = minOf(size.width * 0.6f, size.height * 0.6f, 180.dp.toPx())
+        val left = (size.width - length) / 2f; val top = (size.height - length) / 2f
+        val check = android.graphics.Path().apply {
+            moveTo(left + length * 5f / 24f, top + length * 12f / 24f)
+            lineTo(left + length * 10f / 24f, top + length * 17f / 24f)
+            lineTo(left + length * 19f / 24f, top + length * 7f / 24f)
+        }
+        val cutout = android.graphics.Path()
+        android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE; strokeWidth = length * 1.8f / 24f
+            strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
+        }.getFillPath(check, cutout)
+        val mask = android.graphics.Path().apply {
+            addRect(0f, 0f, size.width, size.height, android.graphics.Path.Direction.CW)
+            op(cutout, android.graphics.Path.Op.DIFFERENCE)
+        }
+        drawContext.canvas.nativeCanvas.drawPath(mask, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(42, 35, 165, 75)
+        })
     }
 }

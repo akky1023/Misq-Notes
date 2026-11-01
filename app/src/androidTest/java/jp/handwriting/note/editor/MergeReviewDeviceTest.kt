@@ -399,8 +399,25 @@ class MergeReviewDeviceTest {
             }
             val original = AppMessages.text(R.string.merge_original_version)
             val remote = model.mergeReview.value.session!!.sourceLabel(1)
-            click(AppMessages.text(R.string.merge_metadata_name_choice, remote))
+            val nameChoice = AppMessages.text(R.string.merge_metadata_name_choice, remote)
+            fun choiceSelected(): Boolean {
+                var node = find(nameChoice) ?: return false
+                while (!node.isClickable && node.parent != null) node = node.parent
+                node.refresh()
+                return node.isSelected || node.isChecked
+            }
+            click(nameChoice)
+            waitFor { choiceSelected() }
+            click(nameChoice)
+            waitFor { !choiceSelected() }
+            click(nameChoice)
             click(AppMessages.text(R.string.merge_metadata_paper_choice, original))
+            instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+                File(instrumentation.targetContext.getExternalFilesDir(null), "merge-metadata-selection.png").outputStream().use {
+                    image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+                }
+                image.recycle()
+            }
             click(AppMessages.text(R.string.merge_metadata_continue))
             waitFor { find(AppMessages.text(R.string.merge_step_number, 1, 2)) != null }
             assertNull(find(AppMessages.text(R.string.merge_metadata_review)))
