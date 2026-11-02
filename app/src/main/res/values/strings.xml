@@ -207,7 +207,7 @@
     <string name="storage_location" formatted="false">"ノートの保存先"</string>
     <string name="choose_folder" formatted="false">"フォルダを指定"</string>
     <string name="restore_default" formatted="false">"デフォルトに戻す"</string>
-    <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。指定した保存先に、用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
+    <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。外部フォルダを選ぶと、ノートはその場所に保存され、開くときに読み込みます。保存先にアクセスできない間は保存を完了できません。用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
     <string name="position_left">左</string>
     <string name="position_right">右</string>

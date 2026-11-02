@@ -13,7 +13,8 @@ internal data class NoteConflict(val key: String, val noteId: String, val title:
 internal val conflictVersionOrder = compareByDescending<NoteConflict> { it.updatedAt }.thenBy { it.key }
 
 /** Different contents with the same embedded ID; names and sync vendor conventions are irrelevant. */
-internal class NoteConflicts(private val notes: File, private val state: File) {
+internal class NoteConflicts(private val notes: File, private val state: File,
+    private val remoteContains: (String) -> Boolean = { false }, private val ensure: (String) -> Unit = {}) {
     private data class Version(val source: ConflictSource, val index: MisqFile.Index, val key: String)
     private data class Cached(val stamp: NoteFileStamp, val version: Version)
     private val cache = mutableMapOf<String, Cached>()
@@ -30,8 +31,14 @@ internal class NoteConflicts(private val notes: File, private val state: File) {
     private fun opened(): JSONObject = if (!imports.exists()) JSONObject() else JSONObject(String(NoteFiles.readEnvelope(imports), Charsets.UTF_8))
 
     @Synchronized fun scan(additional: List<ConflictSource> = emptyList()): List<NoteConflict> {
-        val sources = notes.listFiles().orEmpty().filter { it.isFile && it.extension.equals("misq", true) }
+        var sources = notes.listFiles().orEmpty().filter { it.isFile && it.extension.equals("misq", true) }
             .map { ConflictSource(it, primary = runCatching { UUID.fromString(it.nameWithoutExtension).toString() == it.nameWithoutExtension }.getOrDefault(false)) } + additional
+        // Only aliases that actually exist need their external primary for comparison.
+        val ids = sources.mapNotNull { runCatching { version(it).index.manifest.info.id }.getOrNull() }.distinct()
+        ids.filter { remoteContains(it) && !File(notes, "$it.misq").exists() }.forEach { id ->
+            ensure(id)
+            sources = sources + ConflictSource(File(notes, "$id.misq"), primary = true)
+        }
         cache.keys.retainAll(sources.map { it.file.absolutePath }.toSet())
         val versions = sources.mapNotNull { source -> runCatching { version(source) }.getOrNull() }
         val handled = opened()
@@ -51,13 +58,14 @@ internal class NoteConflicts(private val notes: File, private val state: File) {
         }.sortedWith(conflictVersionOrder)
     }
 
-    fun missingWorkingCopy(noteId: String) = !File(notes, "$noteId.misq").exists()
+    fun missingWorkingCopy(noteId: String) = !remoteContains(noteId) && !File(notes, "$noteId.misq").exists()
 
     /** Recheck the selected version and choose the current working file or newest provisional version. */
     @Synchronized fun mergeSources(conflict: NoteConflict, provisionalBase: NoteConflict? = null): Pair<File, File> {
         cache.remove(conflict.file.absolutePath)
         check(version(ConflictSource(conflict.file, conflict.filename)).key == conflict.key) { AppMessages.text(R.string.conflict_version_changed) }
         val original = File(notes, "${conflict.noteId}.misq")
+        if (!original.exists() && remoteContains(conflict.noteId)) ensure(conflict.noteId)
         if (conflict.provisional && !original.exists()) {
             val latest = provisionalBase ?: scan().filter { it.noteId == conflict.noteId }
                 .minWithOrNull(conflictVersionOrder) ?: conflict

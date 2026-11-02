@@ -11,7 +11,7 @@ import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Runs the actual production storage coordinator on copies only. */
+/** Regression coverage for the legacy packed migration coordinator on copies only. */
 class PackedStorageIntegrationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
@@ -28,7 +28,7 @@ class PackedStorageIntegrationTest {
         try {
             val notes = NoteFiles(File(work, "notes")).list()
             val edited = notes.minBy { it.strokes }
-            val storage = NotebookStorage(context, work, scope)
+            val storage = LegacyNotebookStorage(context, work, scope)
             val start = System.nanoTime()
             assertFalse(storage.initialize())
             report("localInitializeMs=${(System.nanoTime() - start) / 1_000_000}")
@@ -48,7 +48,7 @@ class PackedStorageIntegrationTest {
             assertEquals(NoteFiles(File(work, "notes")).list().map { it.id to it.title }, NoteFiles(File(restored, "notes")).list().map { it.id to it.title })
             report("migrated files=${remote.files.size} physicalObjects=${physical.names().size}")
 
-            val restarted = NotebookStorage(context, work, scope)
+            val restarted = LegacyNotebookStorage(context, work, scope)
             val restartStart = System.nanoTime(); assertFalse(restarted.initialize())
             restarted.startBackground(); assertTrue(withTimeout(30000) { restarted.awaitSync() })
             report("packedRestartAndVerifyMs=${(System.nanoTime() - restartStart) / 1_000_000}")
@@ -59,18 +59,18 @@ class PackedStorageIntegrationTest {
             NoteFiles(File(restored, "notes")).rename(edited.id, "remote update")
             val sourceFiles = remote.files.keys.associateWith { File(restored, it) }
             remoteReader.commit(sourceFiles)
-            val downloader = NotebookStorage(context, work, scope)
+            val downloader = LegacyNotebookStorage(context, work, scope)
             assertFalse(downloader.initialize()); downloader.startBackground()
             assertFalse(withTimeout(30000) { downloader.awaitSync() })
             assertTrue(File(work, ".notes-incoming").isDirectory)
             assertEquals("copy edit during connection", NoteFiles(File(work, "notes")).list().single { it.id == edited.id }.title)
-            val afterRestart = NotebookStorage(context, work, scope)
+            val afterRestart = LegacyNotebookStorage(context, work, scope)
             assertFalse(afterRestart.initialize())
             assertEquals("remote update", NoteFiles(File(work, "notes")).list().single { it.id == edited.id }.title)
             report("remoteUpdateStagedAndAppliedOnRestart=true")
 
             // Local and remote edits from the same base must both survive, without overwrite.
-            val conflicted = NotebookStorage(context, beforeRemote, scope)
+            val conflicted = LegacyNotebookStorage(context, beforeRemote, scope)
             assertFalse(conflicted.initialize())
             conflicted.write { NoteFiles(File(beforeRemote, "notes")).rename(edited.id, "local conflict copy") }
             conflicted.startBackground()

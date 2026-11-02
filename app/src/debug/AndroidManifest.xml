@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <provider android:name=".storage.WorkingSetDocumentsProvider"
+            android:authorities="net.neomenia.misqnotes.probe.tests.working-set"
+            android:permission="android.permission.MANAGE_DOCUMENTS"
+            android:exported="true" android:grantUriPermissions="true" />
         <activity android:name=".ConflictFixtureActivity" android:exported="false" />
         <activity android:name=".ProbeActivity" android:exported="false" />
         <activity android:name=".PerformanceActivity" android:exported="false" />

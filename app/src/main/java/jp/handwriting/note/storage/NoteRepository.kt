@@ -40,6 +40,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     private fun content(note: NoteManifest) = note.copy(info = note.info.copy(updatedAt = 0,
         position = jp.handwriting.note.editor.ViewPosition(), color = 0, size = 0f))
     private val orphanSweeps = mutableMapOf<String, Int>()
+    @Synchronized internal fun releaseWorkingCopies(release: () -> Unit) { release() }
     @Synchronized fun list(): List<NoteSummary> {
         val provisional = files.provisionalVersions().mapValues { it.value.second }
         return ((listCache?.list(files::list) ?: files.list()).filter { it.id !in provisional } + provisional.values)

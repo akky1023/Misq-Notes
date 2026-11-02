@@ -29,19 +29,27 @@ internal interface ArchiveDirectory {
 }
 
 /** Snapshots can own disk copies instead of retaining whole notebooks in the Android heap. */
-internal class ArchiveBlob private constructor(private val memory: ByteArray?, private val file: File?) {
+internal class ArchiveBlob private constructor(private val memory: ByteArray?, private val file: File?,
+    private val remoteHash: String? = null, private val fetch: ((File) -> Unit)? = null, private val temporary: File? = null) {
     constructor(bytes: ByteArray) : this(bytes, null)
     constructor(file: File) : this(null, file)
-    val bytes: ByteArray get() = memory ?: file!!.readBytes()
-    val size: Long get() = memory?.size?.toLong() ?: file!!.length()
-    val hash = memory?.let(NotebookArchive::digest) ?: NotebookArchive.digest(file!!)
+    constructor(hash: String, temporary: File, fetch: (File) -> Unit) : this(null, null, hash, fetch, temporary)
+    private fun <T> materialize(block: (File) -> T): T {
+        file?.let { return block(it) }
+        val copy = File(checkNotNull(temporary), ".notes-fetch-${UUID.randomUUID()}.misq")
+        try { copyTo(copy); return block(copy) } finally { copy.delete() }
+    }
+    val bytes: ByteArray get() = memory ?: materialize { it.readBytes() }
+    val size: Long get() = memory?.size?.toLong() ?: file?.length() ?: Long.MAX_VALUE
+    val hash = remoteHash ?: memory?.let(NotebookArchive::digest) ?: NotebookArchive.digest(file!!)
     fun copyTo(target: File) {
         if (file != null) {
             if (file.canonicalFile != target.canonicalFile) file.copyTo(target, overwrite = true)
-        } else target.writeBytes(memory!!)
+        } else if (memory != null) target.writeBytes(memory)
+        else { checkNotNull(fetch)(target); check(NotebookArchive.digest(target) == hash) { "Invalid external notebook copy" } }
     }
     fun writeTo(directory: ArchiveDirectory, name: String) {
-        if (file != null) directory.writeFile(name, file) else directory.write(name, memory!!)
+        if (memory != null) directory.write(name, memory) else materialize { directory.writeFile(name, it) }
     }
 }
 
@@ -51,11 +59,11 @@ internal class ArchiveSnapshot(private val root: File, private val blobs: Map<St
     override val entries get() = blobs.entries
     override fun close() { root.deleteRecursively() }
     companion object {
-        fun capture(files: Map<String, File>): ArchiveSnapshot {
+        fun capture(files: Map<String, File>, references: Map<String, ArchiveBlob> = emptyMap()): ArchiveSnapshot {
             val root = File(files.values.first().parentFile, ".notes-snapshot-${UUID.randomUUID()}")
             check(root.mkdirs())
             try {
-                return ArchiveSnapshot(root, files.mapValues { (path, source) ->
+                return ArchiveSnapshot(root, references + files.mapValues { (path, source) ->
                     val copy = File(root, path).also { it.parentFile!!.mkdirs() }
                     source.copyTo(copy)
                     ArchiveBlob(copy)

@@ -9,7 +9,8 @@ import kotlinx.coroutines.withContext
 /** Shares the short local-file lock, but releases it before any external provider operation. */
 internal class ArchiveSync(scope: CoroutineScope, private val pending: File, private val localLock: Any,
     private val files: () -> Map<String, File>, batchMillis: Long = 750,
-    private val committed: (Map<String, ArchiveBlob>) -> Unit = {}, private val conflicted: () -> Unit = {}) {
+    private val committed: (Map<String, ArchiveBlob>) -> Unit = {}, private val conflicted: () -> Unit = {},
+    private val failed: (Exception) -> Unit = {}) {
     private var target: NotebookArchive? = null
     private var version = 0L
     private val queue = SaveQueue<NotebookArchive>(scope, batchMillis) { requested -> withContext(Dispatchers.IO) {
@@ -20,6 +21,7 @@ internal class ArchiveSync(scope: CoroutineScope, private val pending: File, pri
             snapshot.second.use {
                 try { synchronized(requested) { requested.commitSnapshot(snapshot.second) } }
                 catch (error: ArchiveConflictException) { conflicted(); throw error }
+                catch (error: Exception) { failed(error); throw error }
                 synchronized(localLock) {
                     if (target === requested) committed(snapshot.second)
                     // An older successful sync must never acknowledge a later unsynchronized edit.

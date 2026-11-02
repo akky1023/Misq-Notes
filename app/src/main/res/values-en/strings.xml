@@ -207,7 +207,7 @@
     <string name="storage_location" formatted="false">"Note storage location"</string>
     <string name="choose_folder" formatted="false">"Choose folder"</string>
     <string name="restore_default" formatted="false">"Use default"</string>
-    <string name="storage_help" formatted="false">"Your notes and folders move with you. Paper defaults, color palettes and width presets are also saved in the selected location."</string>
+    <string name="storage_help" formatted="false">"Your notes and folders move with you. When you choose an external folder, notes are stored there and downloaded when opened. Saving cannot finish while that folder is unavailable. Paper defaults, color palettes and width presets are also saved there."</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
     <string name="position_left">Left</string>
     <string name="position_right">Right</string>

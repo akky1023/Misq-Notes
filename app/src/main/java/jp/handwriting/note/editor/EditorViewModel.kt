@@ -189,7 +189,8 @@ class EditorViewModel : ViewModel() {
         if (repository != null || starting) return
         storageDirectory = directory
         if (mergeCache == null) mergeCache = File(directory, "merge-reviews")
-        conflictStore = NoteConflicts(File(directory, "notes"), File(directory, "conflicts"))
+        conflictStore = NoteConflicts(File(directory, "notes"), File(directory, "conflicts"),
+            remoteContains = { notebookStorage?.contains(it) == true }, ensure = { notebookStorage?.ensure(it) })
         starting = true
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
@@ -197,7 +198,7 @@ class EditorViewModel : ViewModel() {
                 val needsRemote = withContext(Dispatchers.IO) { notebookStorage?.initialize() == true }
                 if (needsRemote) notebookStorage?.initializeRemote()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
-                repository = withContext(Dispatchers.IO) { NoteRepository(NoteFiles(File(directory, "notes")),
+                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
                     NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
@@ -304,6 +305,7 @@ class EditorViewModel : ViewModel() {
                     val candidate = remaining.firstOrNull { it.noteId == current }
                     if (candidate != null && !mutableUi.value.busy && !mutableWorkspace.value.working && !closing &&
                         withContext(Dispatchers.IO) { store.canAutoMerge(candidate) }) beginMerge(candidate, listOf(candidate))
+                    withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 }
             } catch (e: Exception) {
                 mutableConflicts.value = mutableConflicts.value.copy(error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
@@ -503,11 +505,12 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || repository == null) return
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
-            try { enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
+            try { notebookStorage?.keepOpen(id); enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
             catch (e: Exception) { fail(e) }
         }
     }
     private fun enter(note: LoadedNote) {
+        notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
         viewport.restore(note.manifest.info.position)
@@ -539,6 +542,12 @@ class EditorViewModel : ViewModel() {
                 }
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
+                previewSaves?.let { it.await(it.state.value.latest) }
+                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                withContext(Dispatchers.IO) {
+                    notebookStorage?.keepOpen(null)
+                    repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() }
+                }
                 restoring = true
                 mutableWorkspace.value = mutableWorkspace.value.copy(current = null, recovered = false)
                 closing = false
@@ -553,7 +562,12 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { action() }; refreshList() } catch (e: Exception) { fail(e) }
+            try {
+                withContext(Dispatchers.IO) { action() }
+                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
+                refreshList()
+            } catch (e: Exception) { fail(e) }
         }
     }
     private fun fail(e: Exception) { mutableWorkspace.value = mutableWorkspace.value.copy(working = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed)) }

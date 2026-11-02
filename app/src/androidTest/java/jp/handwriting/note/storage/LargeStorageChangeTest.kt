@@ -48,14 +48,16 @@ class LargeStorageChangeTest {
             assertTrue(work.listFiles().orEmpty().none { it.name.startsWith(".notes-snapshot-") })
 
             val restarted = NotebookStorage(context, work, scope)
-            assertFalse(restarted.initialize())
+            assertTrue(restarted.initialize())
+            restarted.initializeRemote()
             assertTrue(withTimeout(300000) { restarted.awaitSync() })
             val imported = File(parent, "imported").also { it.mkdirs() }
             val importer = NotebookStorage(context, imported, scope)
             assertTrue(importer.initialize())
             importer.initializeRemote()
             assertTrue(withTimeout(300000) { importer.awaitSync() })
-            val restored = NoteFiles(File(imported, "notes"))
+            val restored = importer.noteFiles()
+            assertTrue(File(imported, "notes").listFiles().orEmpty().none { it.extension == "misq" })
             assertEquals(expected, restored.list().associate { it.id to NotebookArchive.digest(restored.document(it.id).file) })
             assertEquals(setOf("large-0", "large-1"), restored.list().map { it.title }.toSet())
             instrumentation.sendStatus(0, Bundle().apply {

@@ -18,7 +18,8 @@ internal data class NotebookPresets(val paper: NotePaper, val palettes: SavedPal
             } }.toByteArray()
             NoteFiles.atomicWrite(file, bytes)
         }
-        fun read(file: File): NotebookPresets = DataInputStream(ByteArrayInputStream(NoteFiles.readEnvelope(file))).use { input ->
+        fun read(file: File): NotebookPresets = decode(NoteFiles.readEnvelope(file))
+        fun decode(bytes: ByteArray): NotebookPresets = DataInputStream(ByteArrayInputStream(bytes)).use { input ->
             val version = input.readInt(); require(version in 1..2)
             val paper = NotePaper(input.readInt(), PaperPattern.entries[input.readInt()], input.readInt(), input.readInt(), input.readFloat()).let { if (version >= 2) it.readMargin(input) else it }
             fun colors(): List<Int> {
