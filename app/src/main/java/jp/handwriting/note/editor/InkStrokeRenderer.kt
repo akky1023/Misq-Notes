@@ -23,7 +23,7 @@ internal object InkStrokeRenderer {
         view.rendererFactory = { create() }
     }
 
-    /** In-progress strokes keep Ink's latency-sensitive path; completed geometry is localized. */
+    /** Live strokes keep Ink's latency-sensitive path; completed tips are smoothed in local space. */
     @OptIn(ExperimentalInkCustomBrushApi::class)
     @SuppressLint("RestrictedApi")
     private class LocalRenderer(private val delegate: CanvasStrokeRenderer) : CanvasStrokeRenderer by delegate {
