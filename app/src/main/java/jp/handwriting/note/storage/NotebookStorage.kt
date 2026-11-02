@@ -47,7 +47,7 @@ internal class NotebookStorage(private val context: Context, private val directo
     private fun rememberBase(snapshot: Map<String, ArchiveBlob>) {
         val stage = File(directory, ".notes-merge-base-next")
         stage.deleteRecursively(); stage.mkdirs()
-        snapshot.forEach { (path, blob) -> File(stage, path).also { it.parentFile!!.mkdirs(); it.writeBytes(blob.bytes) } }
+        snapshot.forEach { (path, blob) -> File(stage, path).also { it.parentFile!!.mkdirs(); blob.copyTo(it) } }
         // Losing a merge baseline only disables automatic merge; it never loses notebook content.
         mergeBase.deleteRecursively(); check(stage.renameTo(mergeBase))
     }
@@ -58,6 +58,10 @@ internal class NotebookStorage(private val context: Context, private val directo
     val label: String get() = if (uri == null) AppMessages.text(R.string.storage_default) else choice.getString("label", null) ?: AppMessages.text(R.string.storage_selected)
     /** Local-only recovery. Returns true only when no local library exists to display. */
     @Synchronized fun initialize(): Boolean {
+        // Process death can interrupt a snapshot before its owner reaches finally/use.
+        directory.listFiles().orEmpty().filter {
+            it.isDirectory && it.name.matches(Regex("\\.notes-snapshot-[a-f0-9-]{36}"))
+        }.forEach { it.deleteRecursively() }
         if (context.packageName == "net.neomenia.misqnotes") PreMigrationBackup.ensure(context, "before-misq-v2.zip")
         val backup = File(directory, ".notes-before-import")
         if (backup.exists()) {
@@ -71,7 +75,7 @@ internal class NotebookStorage(private val context: Context, private val directo
         val hasLocal = File(directory, "library.hwp").exists() ||
             File(directory, "notes").listFiles().orEmpty().any { it.extension == "misq" || it.isDirectory && runCatching { UUID.fromString(it.name) }.isSuccess }
         if (uri != null && hasLocal && !checkpoint.exists() && !pending.exists()) {
-            NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(snapshotFiles().mapValues { NotebookArchive.digest(it.value.readBytes()) }))
+            NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(snapshotFiles().mapValues { NotebookArchive.digest(it.value) }))
         }
         return uri != null && !hasLocal
     }
@@ -102,7 +106,7 @@ internal class NotebookStorage(private val context: Context, private val directo
         val packed = packedSource.latestCaptured(snapshot)
         if (packed != null) {
             val expected = packed.name
-            target.beforeFirstCommit = { if (packedSource.latestCaptured(snapshot)?.name != expected) throw ArchiveConflictException() }
+            target.beforeFirstCommit = { if (packedSource.latest()?.name != expected) throw ArchiveConflictException() }
             return Opened(target, packedSource, packed, true)
         }
         val documents = DocumentArchiveDirectory(context.contentResolver, tree)
@@ -114,101 +118,98 @@ internal class NotebookStorage(private val context: Context, private val directo
         if (revision != null) {
             val expected = revision!!.name
             val legacy = source
-            target.beforeFirstCommit = { if (legacy.latestCaptured(snapshot)?.name != expected) throw ArchiveConflictException() }
+            target.beforeFirstCommit = { if (legacy.latest()?.name != expected) throw ArchiveConflictException() }
         }
         return Opened(target, source, revision, true)
     }
     private fun connect(token: Long, foreground: Boolean) {
         val tree: Uri
         val version: Long
-        val local: Map<String, ArchiveBlob>
+        val local: ArchiveSnapshot
         val base: Map<String, String>?
         synchronized(this) {
             tree = uri ?: return
             version = localVersion
-            local = NotebookArchive(object : ArchiveDirectory {
-                override fun names() = emptySet<String>()
-                override fun read(name: String): ByteArray = error("Local capture only")
-                override fun write(name: String, bytes: ByteArray) = Unit
-                override fun delete(name: String) = Unit
-            }).capture(snapshotFiles())
+            local = ArchiveSnapshot.capture(snapshotFiles())
             base = runCatching { NotebookArchive.decode(NoteFiles.readEnvelope(checkpoint)) }.getOrNull()
         }
-        val opened = open(tree, local)
-        val hashes = local.mapValues { it.value.hash }
-        val remote = opened.revision
-        val repairingFromKnownLocal = opened.source.recovered && base == hashes
-        var matches = remote == null || remote.files == hashes || (base != null && remote.files == base) || repairingFromKnownLocal
-        if (!matches && opened.migrating && remote != null) {
-            val compare = File(directory, ".notes-migration-check-${UUID.randomUUID()}")
-            try {
-                val legacy = File(compare, "legacy")
-                opened.source.restore(remote, legacy)
-                matches = MisqMigration.sameContent(local, legacy, File(compare, "local"))
-            } finally { compare.deleteRecursively() }
-        }
-        if (!matches && !foreground) {
-            val incoming = File(directory, ".notes-incoming-${UUID.randomUUID()}")
-            try {
-                opened.source.restore(checkNotNull(remote), incoming)
-                if (remote.files.keys.all { it in listOf("folders.hwp", "presets.hwp") || it.endsWith(".misq") } &&
-                    hashes.keys.all { it in listOf("folders.hwp", "presets.hwp") || it.endsWith(".misq") } && (pending.exists() || base != hashes)) {
-                    val original = mergeBase.walkTopDown().filter { it.isFile }.associate { it.relativeTo(mergeBase).invariantSeparatorsPath to it.readBytes() }
-                    val external = remote.files.mapValues { (path, _) -> File(incoming, path).readBytes() }
-                    val work = File(directory, ".notes-merge-work-${UUID.randomUUID()}")
-                    try {
-                        val merged = MisqMerge.merge(original, local.mapValues { it.value.bytes }, external, work)
-                        synchronized(opened.target) { opened.target.commitSnapshot(merged) }
-                        remote.files.keys.filter { it !in merged }.forEach { File(incoming, it).delete() }
-                        merged.forEach { (path, blob) -> File(incoming, path).also { it.parentFile!!.mkdirs(); it.writeBytes(blob.bytes) } }
-                        NoteFiles.atomicWrite(File(incoming, "remote.hna"), NotebookArchive.encode(merged.mapValues { it.value.hash }))
-                        NoteFiles.atomicWrite(File(incoming, "base.hna"), NotebookArchive.encode(hashes))
-                        File(incoming, "tree.txt").writeText(tree.toString())
-                        synchronized(this) {
-                            if (epoch != token || localVersion != version) throw ArchiveConflictException()
-                            val previous = File(directory, ".notes-incoming")
-                            if (previous.exists()) check(previous.renameTo(File(directory, ".notes-incoming-retained-${UUID.randomUUID()}")))
-                            check(incoming.renameTo(previous))
-                            pending.delete(); blockedByRemoteChange = true
-                        }
-                        throw java.io.IOException(AppMessages.text(R.string.storage_incoming))
-                    } finally { work.deleteRecursively() }
-                }
-                NoteFiles.atomicWrite(File(incoming, "remote.hna"), NotebookArchive.encode(remote.files))
-                NoteFiles.atomicWrite(File(incoming, "base.hna"), NotebookArchive.encode(hashes))
-                File(incoming, "tree.txt").writeText(tree.toString())
-                synchronized(this) {
-                    if (epoch != token) return
-                    blockedByRemoteChange = true
-                    if (localVersion == version && !pending.exists() && base == hashes && !File(directory, ".notes-incoming").exists()) {
-                        check(incoming.renameTo(File(directory, ".notes-incoming")))
-                        throw java.io.IOException(AppMessages.text(R.string.storage_incoming))
-                    }
-                }
-                throw ArchiveConflictException()
-            } catch (error: Exception) {
-                synchronized(this) { if (epoch == token) blockedByRemoteChange = true }
-                throw error
-            } finally { /* Incoming/conflict copies intentionally survive restart. */ }
-        }
-        synchronized(this) {
-            if (epoch != token) return
-            if (foreground && remote != null && remote.files != hashes) restore(opened.source, remote)
-            archive = opened.target; syncs.attach(opened.target)
-            recovered = opened.source.recovered
-            blockedByRemoteChange = false
-            if (remote != null && !opened.migrating) NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(remote.files))
-            if (remote?.files == hashes && !mergeBase.exists()) rememberBase(local)
-            if (opened.migrating || opened.source.recovered || pending.exists() || localVersion != version || remote?.files != hashes) {
-                syncs.dirty(true); scheduleSync()
+        try {
+            val opened = open(tree, local)
+            val hashes = local.mapValues { it.value.hash }
+            val remote = opened.revision
+            val repairingFromKnownLocal = opened.source.recovered && base == hashes
+            var matches = remote == null || remote.files == hashes || (base != null && remote.files == base) || repairingFromKnownLocal
+            if (!matches && opened.migrating && remote != null) {
+                val compare = File(directory, ".notes-migration-check-${UUID.randomUUID()}")
+                try {
+                    val legacy = File(compare, "legacy")
+                    opened.source.restore(remote, legacy)
+                    matches = MisqMigration.sameContent(local, legacy, File(compare, "local"))
+                } finally { compare.deleteRecursively() }
             }
-        }
+            if (!matches && !foreground) {
+                val incoming = File(directory, ".notes-incoming-${UUID.randomUUID()}")
+                try {
+                    opened.source.restore(checkNotNull(remote), incoming)
+                    if (remote.files.keys.all { it in listOf("folders.hwp", "presets.hwp") || it.endsWith(".misq") } &&
+                        hashes.keys.all { it in listOf("folders.hwp", "presets.hwp") || it.endsWith(".misq") } && (pending.exists() || base != hashes)) {
+                        val original = mergeBase.walkTopDown().filter { it.isFile }.associate { it.relativeTo(mergeBase).invariantSeparatorsPath to ArchiveBlob(it) }
+                        val external = remote.files.mapValues { (path, _) -> ArchiveBlob(File(incoming, path)) }
+                        val work = File(directory, ".notes-merge-work-${UUID.randomUUID()}")
+                        try {
+                            val merged = MisqMerge.mergeFiles(original, local, external, work)
+                            synchronized(opened.target) { opened.target.commitSnapshot(merged) }
+                            remote.files.keys.filter { it !in merged }.forEach { File(incoming, it).delete() }
+                            merged.forEach { (path, blob) -> File(incoming, path).also { it.parentFile!!.mkdirs(); blob.copyTo(it) } }
+                            NoteFiles.atomicWrite(File(incoming, "remote.hna"), NotebookArchive.encode(merged.mapValues { it.value.hash }))
+                            NoteFiles.atomicWrite(File(incoming, "base.hna"), NotebookArchive.encode(hashes))
+                            File(incoming, "tree.txt").writeText(tree.toString())
+                            synchronized(this) {
+                                if (epoch != token || localVersion != version) throw ArchiveConflictException()
+                                val previous = File(directory, ".notes-incoming")
+                                if (previous.exists()) check(previous.renameTo(File(directory, ".notes-incoming-retained-${UUID.randomUUID()}")))
+                                check(incoming.renameTo(previous))
+                                pending.delete(); blockedByRemoteChange = true
+                            }
+                            throw java.io.IOException(AppMessages.text(R.string.storage_incoming))
+                        } finally { work.deleteRecursively() }
+                    }
+                    NoteFiles.atomicWrite(File(incoming, "remote.hna"), NotebookArchive.encode(remote.files))
+                    NoteFiles.atomicWrite(File(incoming, "base.hna"), NotebookArchive.encode(hashes))
+                    File(incoming, "tree.txt").writeText(tree.toString())
+                    synchronized(this) {
+                        if (epoch != token) return
+                        blockedByRemoteChange = true
+                        if (localVersion == version && !pending.exists() && base == hashes && !File(directory, ".notes-incoming").exists()) {
+                            check(incoming.renameTo(File(directory, ".notes-incoming")))
+                            throw java.io.IOException(AppMessages.text(R.string.storage_incoming))
+                        }
+                    }
+                    throw ArchiveConflictException()
+                } catch (error: Exception) {
+                    synchronized(this) { if (epoch == token) blockedByRemoteChange = true }
+                    throw error
+                } finally { /* Incoming/conflict copies intentionally survive restart. */ }
+            }
+            synchronized(this) {
+                if (epoch != token) return
+                if (foreground && remote != null && remote.files != hashes) restore(opened.source, remote)
+                archive = opened.target; syncs.attach(opened.target)
+                recovered = opened.source.recovered
+                blockedByRemoteChange = false
+                if (remote != null && !opened.migrating) NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(remote.files))
+                if (remote?.files == hashes && !mergeBase.exists()) rememberBase(local)
+                if (opened.migrating || opened.source.recovered || pending.exists() || localVersion != version || remote?.files != hashes) {
+                    syncs.dirty(true); scheduleSync()
+                }
+            }
+        } finally { local.close() }
     }
     private fun applyIncoming() {
         val incoming = File(directory, ".notes-incoming")
         if (!incoming.isDirectory || pending.exists() || File(incoming, "tree.txt").readText() != uri?.toString()) return
         val base = NotebookArchive.decode(NoteFiles.readEnvelope(File(incoming, "base.hna")))
-        val current = snapshotFiles().mapValues { NotebookArchive.digest(it.value.readBytes()) }
+        val current = snapshotFiles().mapValues { NotebookArchive.digest(it.value) }
         if (current != base) { blockedByRemoteChange = true; return }
         val remote = NotebookArchive.decode(NoteFiles.readEnvelope(File(incoming, "remote.hna")))
         val revisionName = "revision-00000000000000000001-${UUID.randomUUID()}"
@@ -216,12 +217,14 @@ internal class NotebookStorage(private val context: Context, private val directo
         val reader = NotebookArchive(object : ArchiveDirectory {
             override fun names() = records.keys + revisionName
             override fun read(name: String) = if (name == revisionName) NotebookArchive.encode(remote) else records.getValue(name).readBytes()
+            override fun matches(name: String, hash: String) = NotebookArchive.digest(records.getValue(name)) == hash
+            override fun copyTo(name: String, file: File) { records.getValue(name).copyTo(file, overwrite = true) }
             override fun write(name: String, bytes: ByteArray): Unit = error("Incoming copy is read-only")
             override fun delete(name: String): Unit = error("Incoming copy is read-only")
         })
         restore(reader, checkNotNull(reader.latest()))
         NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(remote))
-        rememberBase(remote.mapValues { (path, _) -> ArchiveBlob(File(incoming, path).readBytes()) })
+        rememberBase(remote.mapValues { (path, _) -> ArchiveBlob(File(incoming, path)) })
         incoming.deleteRecursively()
     }
     @Synchronized fun <T> write(block: () -> T): T {
@@ -257,9 +260,10 @@ internal class NotebookStorage(private val context: Context, private val directo
     private fun commit() {
         val target = archive ?: throw java.io.IOException(AppMessages.text(R.string.storage_unavailable))
         pending.writeText("pending")
-        val snapshot = target.capture(snapshotFiles())
-        synchronized(target) { target.commitSnapshot(snapshot) }
-        NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(snapshot.mapValues { it.value.hash }))
+        target.capture(snapshotFiles()).use { snapshot ->
+            synchronized(target) { target.commitSnapshot(snapshot) }
+            NoteFiles.atomicWrite(checkpoint, NotebookArchive.encode(snapshot.mapValues { it.value.hash }))
+        }
         pending.delete()
     }
     @android.annotation.SuppressLint("UseKtx") // The boolean result of synchronous commit is required before switching.
@@ -267,35 +271,36 @@ internal class NotebookStorage(private val context: Context, private val directo
         if (tree == uri) { if (pending.exists()) commit(); return }
         if (pending.exists() && tree != null && !blockedByRemoteChange) commit()
         val local = snapshotFiles()
-        val captured = local.mapValues { ArchiveBlob(it.value.readBytes()) }
-        val opened = tree?.let { open(it, captured) }
-        val next = opened?.target
-        val source = opened?.source
-        val revision = opened?.revision
-        if (revision != null) {
-            val selectedRevision = revision
-            val empty = NoteFiles(File(directory, "notes")).list().isEmpty() && libraryFile.read().folders.isEmpty()
-            if (empty) restore(checkNotNull(source), selectedRevision)
-            else check(selectedRevision.files.filterKeys { it != "presets.hwp" } == snapshotFiles()
-                .filterKeys { it in selectedRevision.files && it != "presets.hwp" }.mapValues { NotebookArchive.digest(it.value.readBytes()) }) {
-                AppMessages.text(R.string.storage_different_data)
+        ArchiveSnapshot.capture(local).use { captured ->
+            val opened = tree?.let { open(it, captured) }
+            val next = opened?.target
+            val source = opened?.source
+            val revision = opened?.revision
+            if (revision != null) {
+                val selectedRevision = revision
+                val empty = NoteFiles(File(directory, "notes")).list().isEmpty() && libraryFile.read().folders.isEmpty()
+                if (empty) restore(checkNotNull(source), selectedRevision)
+                else check(selectedRevision.files.filterKeys { it != "presets.hwp" } == snapshotFiles()
+                    .filterKeys { it in selectedRevision.files && it != "presets.hwp" }.mapValues { NotebookArchive.digest(it.value) }) {
+                    AppMessages.text(R.string.storage_different_data)
+                }
             }
+            val name = tree?.let { value ->
+                val document = DocumentsContract.buildDocumentUriUsingTree(value, DocumentsContract.getTreeDocumentId(value))
+                context.contentResolver.query(document, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
+            }
+            check(choice.edit().putString("tree", tree?.toString()).putString("label", name).commit()) { AppMessages.text(R.string.storage_choice_save_failed) }
+            val previousTree = uri
+            epoch++; uri = tree; archive = next; syncs.attach(next); blockedByRemoteChange = false
+            connectionState.value = SaveState()
+            checkpoint.delete()
+            if (tree == null) pending.delete()
+            else { syncs.dirty(); scheduleSync() }
+            previousTree?.let { previous -> runCatching {
+                context.contentResolver.releasePersistableUriPermission(previous,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } }
         }
-        val name = tree?.let { value ->
-            val document = DocumentsContract.buildDocumentUriUsingTree(value, DocumentsContract.getTreeDocumentId(value))
-            context.contentResolver.query(document, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
-        }
-        check(choice.edit().putString("tree", tree?.toString()).putString("label", name).commit()) { AppMessages.text(R.string.storage_choice_save_failed) }
-        val previousTree = uri
-        epoch++; uri = tree; archive = next; syncs.attach(next); blockedByRemoteChange = false
-        connectionState.value = SaveState()
-        checkpoint.delete()
-        if (tree == null) pending.delete()
-        else { syncs.dirty(); scheduleSync() }
-        previousTree?.let { previous -> runCatching {
-            context.contentResolver.releasePersistableUriPermission(previous,
-                android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-        } }
     }
     private fun restore(source: NotebookArchive, revision: NotebookArchive.Revision) {
         val stage = File(directory, ".notes-import-${UUID.randomUUID()}").also { check(it.mkdirs()) }

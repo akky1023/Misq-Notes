@@ -21,14 +21,48 @@ internal interface ArchiveDirectory {
         }
     }
     fun write(name: String, bytes: ByteArray)
+    fun writeFile(name: String, file: File) = write(name, file.readBytes())
+    fun copyTo(name: String, file: File) { file.writeBytes(read(name)) }
     fun delete(name: String)
     fun commit() {}
     fun organize() {}
 }
 
-/** A detached snapshot owns immutable bytes, so later local edits cannot change an in-flight sync. */
-internal class ArchiveBlob(val bytes: ByteArray) {
-    val hash = NotebookArchive.digest(bytes)
+/** Snapshots can own disk copies instead of retaining whole notebooks in the Android heap. */
+internal class ArchiveBlob private constructor(private val memory: ByteArray?, private val file: File?) {
+    constructor(bytes: ByteArray) : this(bytes, null)
+    constructor(file: File) : this(null, file)
+    val bytes: ByteArray get() = memory ?: file!!.readBytes()
+    val size: Long get() = memory?.size?.toLong() ?: file!!.length()
+    val hash = memory?.let(NotebookArchive::digest) ?: NotebookArchive.digest(file!!)
+    fun copyTo(target: File) {
+        if (file != null) {
+            if (file.canonicalFile != target.canonicalFile) file.copyTo(target, overwrite = true)
+        } else target.writeBytes(memory!!)
+    }
+    fun writeTo(directory: ArchiveDirectory, name: String) {
+        if (file != null) directory.writeFile(name, file) else directory.write(name, memory!!)
+    }
+}
+
+/** A private disk copy stays immutable while editing continues; the owner removes it after sync. */
+internal class ArchiveSnapshot(private val root: File, private val blobs: Map<String, ArchiveBlob>) :
+    AbstractMap<String, ArchiveBlob>(), Closeable {
+    override val entries get() = blobs.entries
+    override fun close() { root.deleteRecursively() }
+    companion object {
+        fun capture(files: Map<String, File>): ArchiveSnapshot {
+            val root = File(files.values.first().parentFile, ".notes-snapshot-${UUID.randomUUID()}")
+            check(root.mkdirs())
+            try {
+                return ArchiveSnapshot(root, files.mapValues { (path, source) ->
+                    val copy = File(root, path).also { it.parentFile!!.mkdirs() }
+                    source.copyTo(copy)
+                    ArchiveBlob(copy)
+                })
+            } catch (error: Throwable) { root.deleteRecursively(); throw error }
+        }
+    }
 }
 
 internal class NotebookArchive(private val directory: ArchiveDirectory) {
@@ -41,18 +75,6 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
     private var attemptedHead: String? = null
     var recovered = false
         private set
-    private data class LocalHash(val modified: Long, val size: Long, val blob: ArchiveBlob)
-    private val localHashes = LinkedHashMap<File, LocalHash>(16, 0.75f, true)
-    private var localCacheBytes = 0
-    private fun rememberLocal(file: File, blob: ArchiveBlob) {
-        localHashes.remove(file)?.let { localCacheBytes -= it.blob.bytes.size }
-        if (blob.bytes.size > 8 * 1024 * 1024) return
-        localHashes[file] = LocalHash(file.lastModified(), file.length(), blob)
-        localCacheBytes += blob.bytes.size
-        while (localCacheBytes > 8 * 1024 * 1024) {
-            val first = localHashes.entries.first(); localCacheBytes -= first.value.blob.bytes.size; localHashes.remove(first.key)
-        }
-    }
     private val readCache = object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {}
     private var readCacheBytes = 0
     var localMatches = false
@@ -93,20 +115,24 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
                 val matched = mutableSetOf<String>()
                 for ((path, hash) in revision.files) {
                     val file = localFiles[path]
-                    val local = (captured?.get(path)?.bytes ?: file?.let { runCatching { it.readBytes() }.getOrNull() })?.takeIf { digest(it) == hash }
-                    if (local == null) allLocal = false
+                    val matches = captured?.get(path)?.hash == hash ||
+                        (file != null && runCatching { digest(file) == hash }.getOrDefault(false))
+                    if (!matches) allLocal = false
                     else {
                         matched += hash
-                        remember(hash, local)
-                        if (file != null && file.name.contains(".ink")) rememberLocal(file, ArchiveBlob(local))
+                        if (!path.endsWith(".misq")) {
+                            captured?.get(path)?.takeIf { it.size <= 8 * 1024 * 1024 }?.let { remember(hash, it.bytes) }
+                            if (file != null && file.length() <= 8 * 1024 * 1024) remember(hash, file.readBytes())
+                        }
                     }
                 }
                 val missing = revision.files.values.distinct().filter { it !in matched }
-                // A few small SAF streams in parallel amortize per-document provider round trips.
-                directory.visit(missing.map { "blob-$it" }) { name, bytes ->
-                        val hash = name.removePrefix("blob-")
-                        check(digest(bytes) == hash) { AppMessages.text(R.string.storage_corrupt) }
-                        verified += hash; remember(hash, bytes)
+                // Verify notebook bodies without allocating a byte array for the entire file.
+                missing.forEach { hash ->
+                        if (revision.files.any { it.value == hash && it.key.endsWith(".misq") }) {
+                            check(directory.matches("blob-$hash", hash)) { AppMessages.text(R.string.storage_corrupt) }
+                        } else readBlob(hash)
+                        verified += hash
                 }
                 true
             }.getOrDefault(false)
@@ -125,28 +151,22 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
         }
         val missing = mutableListOf<String>()
         byHash.keys.forEach { hash -> readCache[hash]?.let { save(hash, it) } ?: missing.add("blob-$hash") }
-        directory.visit(missing) { name, bytes ->
+        missing.forEach { name ->
             val hash = name.removePrefix("blob-")
-            check(digest(bytes) == hash) { AppMessages.text(R.string.storage_corrupt) }
-            verified += hash; save(hash, bytes)
+            val paths = byHash.getValue(hash)
+            val first = File(target, paths.first().key).also { it.parentFile!!.mkdirs() }
+            directory.copyTo(name, first)
+            check(digest(first) == hash) { AppMessages.text(R.string.storage_corrupt) }
+            paths.drop(1).forEach { (path, _) -> first.copyTo(File(target, path).also { it.parentFile!!.mkdirs() }, overwrite = true) }
+            verified += hash
         }
     }
     fun commit(files: Map<String, File>) {
-        commitSnapshot(capture(files))
+        capture(files).use { commitSnapshot(it) }
     }
-    fun capture(files: Map<String, File>): Map<String, ArchiveBlob> {
+    fun capture(files: Map<String, File>): ArchiveSnapshot {
         require("folders.hwp" in files && files.keys.all(::validPath))
-        val result = files.mapValues { (_, file) ->
-            val cached = localHashes[file]?.takeIf { file.name.contains(".ink") && it.modified == file.lastModified() && it.size == file.length() }
-            cached?.blob ?: ArchiveBlob(file.readBytes()).also { rememberLocal(file, it) }
-        }
-        val current = files.values.toSet()
-        val entries = localHashes.entries.iterator()
-        while (entries.hasNext()) {
-            val entry = entries.next()
-            if (entry.key !in current) { localCacheBytes -= entry.value.blob.bytes.size; entries.remove() }
-        }
-        return result
+        return ArchiveSnapshot.capture(files)
     }
     fun commitSnapshot(files: Map<String, ArchiveBlob>) {
         require("folders.hwp" in files && files.keys.all(::validPath))
@@ -162,8 +182,7 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
             val hash = blob.hash
             val name = "blob-$hash"
             if (name !in names || (hash !in verified && !runCatching { directory.matches(name, hash) }.getOrDefault(false))) {
-                val bytes = blob.bytes
-                directory.write(name, bytes)
+                blob.writeTo(directory, name)
                 check(directory.matches(name, hash)) { AppMessages.text(R.string.storage_write_unverified) }
             }
             verified += hash
@@ -199,6 +218,16 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
         private val REVISION = Regex("revision-[0-9]{20}-[a-f0-9-]{36}")
         private val BLOB = Regex("blob-[a-f0-9]{64}")
         private const val HEX = "0123456789abcdef"
+        fun digest(file: File): String = file.inputStream().use { input ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+            digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+        }
         fun digest(bytes: ByteArray): String {
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
             return CharArray(hash.size * 2).also { chars -> hash.forEachIndexed { i, byte ->

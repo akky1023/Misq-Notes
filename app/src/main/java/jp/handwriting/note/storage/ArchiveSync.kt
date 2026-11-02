@@ -17,12 +17,14 @@ internal class ArchiveSync(scope: CoroutineScope, private val pending: File, pri
             if (target !== requested) null else version to requested.capture(files())
         }
         if (snapshot != null) {
-            try { synchronized(requested) { requested.commitSnapshot(snapshot.second) } }
-            catch (error: ArchiveConflictException) { conflicted(); throw error }
-            synchronized(localLock) {
-                if (target === requested) committed(snapshot.second)
-                // An older successful sync must never acknowledge a later unsynchronized edit.
-                if (target === requested && version == snapshot.first) pending.delete()
+            snapshot.second.use {
+                try { synchronized(requested) { requested.commitSnapshot(snapshot.second) } }
+                catch (error: ArchiveConflictException) { conflicted(); throw error }
+                synchronized(localLock) {
+                    if (target === requested) committed(snapshot.second)
+                    // An older successful sync must never acknowledge a later unsynchronized edit.
+                    if (target === requested && version == snapshot.first) pending.delete()
+                }
             }
         }
     } }

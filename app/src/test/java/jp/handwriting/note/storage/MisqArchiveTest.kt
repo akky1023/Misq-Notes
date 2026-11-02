@@ -34,6 +34,7 @@ class MisqArchiveTest {
         var failName: (String) -> Boolean = { false }
         var rejectNoteReads = false
         var failStream = false
+        var failUpload = false
         override fun names() = files.keys.toSet()
         override fun read(name: String): ByteArray {
             check(!rejectNoteReads || !(name.startsWith("blob-") || name.endsWith(".misq"))) { "Whole notebook read: $name" }
@@ -41,7 +42,7 @@ class MisqArchiveTest {
         }
         override fun openRead(name: String) = files.getValue(name).inputStream()
         override fun writeStream(name: String, input: java.io.InputStream) {
-            if (failStream) {
+            if (failStream && name.endsWith(".misq") || failUpload && name.startsWith("blob-")) {
                 files[name] = byteArrayOf(input.read().toByte())
                 throw IOException("interrupted stream")
             }
@@ -145,5 +146,24 @@ class MisqArchiveTest {
         reopened.commit(files)
         val note = files.entries.single { it.key.endsWith(".misq") }
         assertEquals(NotebookArchive.digest(note.value.readBytes()), memory.digest(note.value.name))
+    }
+    @Test fun interruptedNotebookUploadKeepsPreviousRevisionAndRetriesPartialBlob() {
+        val (notes, files) = fixture()
+        val memory = Memory()
+        NotebookArchive(MisqArchiveDirectory(memory)).commit(files)
+        notes.rename(notes.list().single().id, "after upload")
+        memory.failUpload = true
+        assertThrows(IOException::class.java) { NotebookArchive(MisqArchiveDirectory(memory)).commit(files) }
+        val reader = NotebookArchive(MisqArchiveDirectory(memory))
+        val previous = temp.newFolder()
+        reader.restore(checkNotNull(reader.latest()), previous)
+        assertEquals("one", NoteFiles(File(previous, "notes")).list().single().title)
+        memory.failUpload = false
+        reader.commit(files)
+        val reopened = NotebookArchive(MisqArchiveDirectory(memory))
+        val restored = temp.newFolder()
+        reopened.restore(checkNotNull(reopened.latest()), restored)
+        assertEquals("after upload", NoteFiles(File(restored, "notes")).list().single().title)
+        assertTrue(files.getValue("folders.hwp").parentFile!!.listFiles()!!.none { it.name.startsWith(".notes-snapshot-") })
     }
 }
