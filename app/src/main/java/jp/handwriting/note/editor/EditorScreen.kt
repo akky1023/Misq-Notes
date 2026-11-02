@@ -177,6 +177,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         IconButton(onClick = { optionsDialog = true }, modifier = Modifier.editorPopoverAnchor { optionsAnchor = it }.semantics { contentDescription = AppMessages.text(R.string.note_settings) }) {
                             Icon(ToolbarIcons.Settings, null)
                         }
+                        ConflictsButton(model, enabled = !ui.busy && !workspace.working)
                     }
                 }
                 val handleTravel = (maxHeight - 80.dp).coerceAtLeast(0.dp)

@@ -13,6 +13,13 @@ import androidx.compose.ui.unit.dp
 
 // Small vector assets keep the toolbar crisp at every display density.
 internal object ToolbarIcons {
+    val Conflicts = icon("Conflicts") {
+        moveTo(5f, 21f); lineTo(5f, 17f); curveTo(5f, 11f, 19f, 13f, 19f, 7f); lineTo(19f, 3f)
+        moveTo(15f, 7f); lineTo(19f, 3f); lineTo(23f, 7f)
+        moveTo(5f, 3f); lineTo(5f, 7f); curveTo(5f, 10f, 8f, 11f, 10f, 12f)
+        moveTo(14f, 14f); curveTo(17f, 15f, 19f, 16f, 19f, 21f)
+        moveTo(1f, 7f); lineTo(5f, 3f); lineTo(9f, 7f)
+    }
     val Preview = icon("Preview") {
         moveTo(4f, 3f); lineTo(20f, 3f); lineTo(20f, 21f); lineTo(4f, 21f); close()
         moveTo(7f, 7f); lineTo(17f, 7f); lineTo(17f, 13f); lineTo(7f, 13f); close()
@@ -94,6 +101,11 @@ internal object ToolbarIcons {
     }
     val More = icon("More") { for (y in listOf(5f, 12f, 19f)) { moveTo(12f, y); lineTo(12.1f, y) } }
     val Copy = icon("Copy") { moveTo(8f, 8f); lineTo(21f, 8f); lineTo(21f, 21f); lineTo(8f, 21f); close(); moveTo(16f, 4f); lineTo(4f, 4f); lineTo(4f, 16f) }
+    val OpenSeparate = icon("OpenSeparate") {
+        moveTo(13f, 4f); lineTo(21f, 4f); lineTo(21f, 12f)
+        moveTo(21f, 4f); lineTo(10f, 15f)
+        moveTo(9f, 4f); lineTo(4f, 4f); lineTo(4f, 21f); lineTo(21f, 21f); lineTo(21f, 16f)
+    }
     val Paste = icon("Paste") { moveTo(8f, 5f); lineTo(4f, 5f); lineTo(4f, 21f); lineTo(20f, 21f); lineTo(20f, 5f); lineTo(16f, 5f); moveTo(8f, 3f); lineTo(16f, 3f); lineTo(16f, 8f); lineTo(8f, 8f); close() }
     val Capture = icon("Capture") { moveTo(3f, 7f); lineTo(7f, 7f); lineTo(9f, 4f); lineTo(15f, 4f); lineTo(17f, 7f); lineTo(21f, 7f); lineTo(21f, 20f); lineTo(3f, 20f); close(); moveTo(16f, 13f); curveTo(16f, 18.3f, 8f, 18.3f, 8f, 13f); curveTo(8f, 7.7f, 16f, 7.7f, 16f, 13f) }
     val Share = icon("Share") { moveTo(12f, 16f); lineTo(12f, 3f); moveTo(7f, 8f); lineTo(12f, 3f); lineTo(17f, 8f); moveTo(5f, 12f); lineTo(5f, 21f); lineTo(19f, 21f); lineTo(19f, 12f) }
@@ -169,6 +181,7 @@ internal object ToolbarIcons {
     }
     val Collapse = icon("Collapse") { moveTo(6f, 15f); lineTo(12f, 9f); lineTo(18f, 15f) }
     val Expand = icon("Expand") { moveTo(6f, 9f); lineTo(12f, 15f); lineTo(18f, 9f) }
+    val ChevronLeft = icon("ChevronLeft") { moveTo(15f, 5f); lineTo(8f, 12f); lineTo(15f, 19f) }
     val ChevronRight = icon("ChevronRight") { moveTo(9f, 5f); lineTo(16f, 12f); lineTo(9f, 19f) }
     val Check = icon("Check") { moveTo(5f, 12f); lineTo(10f, 17f); lineTo(19f, 7f) }
     val Sort = icon("Sort") {

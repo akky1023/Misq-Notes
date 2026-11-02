@@ -26,6 +26,7 @@ android {
         versionCode = releaseVersionCode.toInt()
         versionName = releaseVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testApplicationId = "net.neomenia.misqnotes.probe.tests"
     }
     buildFeatures { compose = true; buildConfig = true }
     // Both languages must be available for switching without a network download.

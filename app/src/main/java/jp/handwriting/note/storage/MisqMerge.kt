@@ -4,6 +4,31 @@ import java.io.File
 
 /** Three-way library merge; each stroke uses its causal event graph rather than file timestamps. */
 internal object MisqMerge {
+    fun mergeFiles(base: Map<String, ArchiveBlob>, local: Map<String, ArchiveBlob>, remote: Map<String, ArchiveBlob>, work: File): Map<String, ArchiveBlob> {
+        work.mkdirs()
+        val result = linkedMapOf<String, ArchiveBlob>()
+        for (path in (base.keys + local.keys + remote.keys).sorted()) {
+            val old = base[path]; val left = local[path]; val right = remote[path]
+            val selected = when {
+                left?.hash == right?.hash || right?.hash == old?.hash -> left
+                left?.hash == old?.hash -> right
+                left == null || right == null -> throw ArchiveConflictException()
+                path.endsWith(".misq") -> {
+                    fun copy(blob: ArchiveBlob, side: String): MisqFile = MisqFile(File(work, "$side/$path").also {
+                        it.parentFile!!.mkdirs(); blob.copyTo(it)
+                    })
+                    val a = copy(left, "local"); val b = copy(right, "remote")
+                    val original = old?.let { copy(it, "base") }
+                    a.rewrite(MisqFile.merge(original, a, b), b)
+                    ArchiveBlob(a.file)
+                }
+                else -> merge(old?.let { mapOf(path to it.bytes) }.orEmpty(),
+                    mapOf(path to left.bytes), mapOf(path to right.bytes), work)[path]
+            }
+            if (selected != null) result[path] = selected
+        }
+        return result
+    }
     fun merge(base: Map<String, ByteArray>, local: Map<String, ByteArray>, remote: Map<String, ByteArray>, work: File): Map<String, ArchiveBlob> {
         work.mkdirs()
         fun same(a: ByteArray?, b: ByteArray?) = if (a == null || b == null) a == null && b == null else a.contentEquals(b)

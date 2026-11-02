@@ -70,6 +70,10 @@ internal data class ToolPreferencesUi(val value: ToolPreferences = ToolPreferenc
 internal data class LibraryUi(val value: LibraryPreferences = LibraryPreferences(), val saving: Boolean = false, val error: String? = null)
 internal data class SelectionOverlay(val left: Float, val top: Float, val right: Float, val bottom: Float, val enabled: Boolean, val canCapture: Boolean = true)
 internal data class StorageLocationUi(val label: String = AppMessages.text(R.string.storage_default), val custom: Boolean = false)
+internal data class ConflictsUi(val items: List<NoteConflict> = emptyList(), val error: String? = null, val opening: Boolean = false)
+internal data class MergeReviewUi(val conflict: NoteConflict? = null, val session: MergeReviewSession? = null,
+    val loading: Boolean = false, val saving: Boolean = false, val error: String? = null,
+    val candidates: List<NoteConflict> = emptyList())
 
 class EditorViewModel : ViewModel() {
     val edits = OrderedEdits<EditorStroke>()
@@ -131,7 +135,19 @@ class EditorViewModel : ViewModel() {
     private var notebookStorage: NotebookStorage? = null
     private val mutableStorageLocation = MutableStateFlow(StorageLocationUi())
     internal val storageLocation = mutableStorageLocation.asStateFlow()
+    private val mutableConflicts = MutableStateFlow(ConflictsUi())
+    internal val conflicts = mutableConflicts.asStateFlow()
+    private var conflictStore: NoteConflicts? = null
+    private var conflictDocuments: ConflictDocuments? = null
+    private var conflictScan: kotlinx.coroutines.Job? = null
+    private val mutableMergeReview = MutableStateFlow(MergeReviewUi())
+    internal val mergeReview = mutableMergeReview.asStateFlow()
+    private var mergeJob: kotlinx.coroutines.Job? = null
+    private var mergeToken = 0L
+    private var mergeCache: File? = null
     internal fun configureStorage(context: android.content.Context) {
+        mergeCache = File(context.cacheDir, "merge-reviews")
+        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(context.cacheDir, "conflict-sources"))
         if (notebookStorage == null) {
             notebookStorage = NotebookStorage(context.applicationContext, context.filesDir, viewModelScope)
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
@@ -172,6 +188,9 @@ class EditorViewModel : ViewModel() {
     fun start(directory: File) {
         if (repository != null || starting) return
         storageDirectory = directory
+        if (mergeCache == null) mergeCache = File(directory, "merge-reviews")
+        conflictStore = NoteConflicts(File(directory, "notes"), File(directory, "conflicts"),
+            remoteContains = { notebookStorage?.contains(it) == true }, ensure = { notebookStorage?.ensure(it) })
         starting = true
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
@@ -179,7 +198,7 @@ class EditorViewModel : ViewModel() {
                 val needsRemote = withContext(Dispatchers.IO) { notebookStorage?.initialize() == true }
                 if (needsRemote) notebookStorage?.initializeRemote()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
-                repository = withContext(Dispatchers.IO) { NoteRepository(NoteFiles(File(directory, "notes")),
+                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
                     NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
@@ -240,6 +259,193 @@ class EditorViewModel : ViewModel() {
         val orders = before.orders.mapValues { (folder, order) -> order.filter { it in ids && locations[it].orEmpty() == folder } }
         if (locations != before.locations || orders != before.orders) updateLibrary(before.copy(locations = locations, orders = orders))
         mutableWorkspace.value = mutableWorkspace.value.copy(notes = notes, working = false)
+        refreshConflicts()
+    }
+    internal fun refreshConflicts() {
+        if (conflictScan?.isActive == true || mutableConflicts.value.opening || repository == null || mutableMergeReview.value.conflict != null) return
+        val store = conflictStore ?: return
+        val directory = storageDirectory ?: return
+        val tree = notebookStorage?.uri
+        conflictScan = viewModelScope.launch {
+            try {
+                val items = withContext(Dispatchers.IO) {
+                    val external = tree?.let { conflictDocuments?.scan(it) }.orEmpty()
+                    val pending = File(directory, ".notes-incoming/notes").listFiles().orEmpty()
+                        .filter { it.isFile && it.extension == "misq" }.map { ConflictSource(it) }
+                    store.scan(external + pending)
+                }
+                if (notebookStorage?.uri == tree) {
+                    // The editor's current document is handled on the main thread after saving it.
+                    val remaining = mutableListOf<NoteConflict>()
+                    var changed = false
+                    for (item in items) {
+                        if (mutableWorkspace.value.current?.id == item.noteId || mutableWorkspace.value.working) {
+                            remaining += item
+                        } else {
+                            val canMerge = withContext(Dispatchers.IO) { store.canAutoMerge(item) }
+                            // A read-only poll must never flash the full-screen busy overlay.
+                            // Recheck UI state after IO so opening a note cannot race a rewrite.
+                            if (!canMerge || mutableWorkspace.value.current?.id == item.noteId || mutableWorkspace.value.working ||
+                                mutableConflicts.value.opening || mutableMergeReview.value.conflict != null) {
+                                remaining += item
+                                continue
+                            }
+                            mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+                            val merged = try { withContext(Dispatchers.IO) { repository!!.autoMergeConflict(store, item) } }
+                            finally { mutableWorkspace.value = mutableWorkspace.value.copy(working = false) }
+                            if (merged == null) remaining += item else changed = true
+                        }
+                    }
+                    if (changed || (items + mutableConflicts.value.items).any { it.provisional }) {
+                        val notes = withContext(Dispatchers.IO) { repository!!.list() }
+                        mutableWorkspace.value = mutableWorkspace.value.copy(notes = notes)
+                    }
+                    mutableConflicts.value = mutableConflicts.value.copy(items = remaining, error = null)
+                    val current = mutableWorkspace.value.current?.id
+                    val candidate = remaining.firstOrNull { it.noteId == current }
+                    if (candidate != null && !mutableUi.value.busy && !mutableWorkspace.value.working && !closing &&
+                        withContext(Dispatchers.IO) { store.canAutoMerge(candidate) }) beginMerge(candidate, listOf(candidate))
+                    withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
+                }
+            } catch (e: Exception) {
+                mutableConflicts.value = mutableConflicts.value.copy(error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
+            }
+        }
+    }
+    internal fun openConflict(conflict: NoteConflict) {
+        if (mutableWorkspace.value.working || mutableUi.value.busy || closing || mutableConflicts.value.opening) return
+        val store = conflictStore ?: return
+        mutableConflicts.value = mutableConflicts.value.copy(opening = true, error = null)
+        mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+        viewModelScope.launch {
+            try {
+                conflictScan?.join()
+                if (mutableWorkspace.value.current != null) {
+                    val generation = enqueueSave(force = true)
+                    check(generation == null || saves!!.await(generation)) { AppMessages.text(R.string.wait_note) }
+                }
+                val title = AppMessages.text(R.string.conflict_copy_title, conflict.title)
+                val loaded = withContext(Dispatchers.IO) {
+                    val manifest = repository!!.copyConflict(store, conflict, title)
+                    repository!!.load(manifest.info.id).also { store.markOpened(conflict, manifest.info.id) }
+                }
+                enter(loaded)
+                mutableConflicts.value = mutableConflicts.value.copy(items = mutableConflicts.value.items.filterNot { it.key == conflict.key }, opening = false)
+            } catch (e: Exception) {
+                mutableWorkspace.value = mutableWorkspace.value.copy(working = false)
+                mutableConflicts.value = mutableConflicts.value.copy(opening = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
+            }
+        }
+    }
+    internal fun beginMerge(conflict: NoteConflict, selectedVersions: List<NoteConflict>? = null) {
+        if (mutableUi.value.busy || mutableWorkspace.value.working || mutableConflicts.value.opening) return
+        val store = conflictStore ?: return
+        val cache = mergeCache ?: return
+        val token = ++mergeToken
+        mutableMergeReview.value = MergeReviewUi(conflict, loading = true)
+        mutableConflicts.value = mutableConflicts.value.copy(opening = true)
+        mergeJob = viewModelScope.launch {
+            var prepared: MergeReviewSession? = null
+            try {
+                conflictScan?.join()
+                if (mutableWorkspace.value.current != null) {
+                    val revision = edits.revision
+                    val generation = enqueueSave(force = true)
+                    check(generation == null || saves!!.await(generation)) { AppMessages.text(R.string.wait_note) }
+                    check(!mutableUi.value.busy && edits.revision == revision) { AppMessages.text(R.string.wait_note) }
+                }
+                val provisional = withContext(Dispatchers.IO) { store.missingWorkingCopy(conflict.noteId) }
+                val available = (listOf(conflict) + mutableConflicts.value.items.filter { it.noteId == conflict.noteId }).distinctBy { it.key }.map { it.copy(provisional = provisional) }
+                val latest = available.minWith(conflictVersionOrder)
+                val base = if (provisional) latest else conflict.copy(provisional = false)
+                val versions = if (provisional) listOf(base) + (selectedVersions?.map { it.copy(provisional = provisional) } ?: available).filter { it.key != base.key }
+                    else selectedVersions?.map { it.copy(provisional = false) } ?: available
+                require(versions.isNotEmpty() && versions.all { it.noteId == conflict.noteId })
+                if (versions.size > (if (provisional) 4 else 3)) {
+                    mutableMergeReview.value = MergeReviewUi(base, candidates = if (provisional) versions.drop(1) else versions)
+                    return@launch
+                }
+                mutableMergeReview.value = mutableMergeReview.value.copy(saving = true)
+                val automatic = if (!provisional && versions.size == 1) withContext(Dispatchers.IO) {
+                    repository!!.autoMergeConflict(store, conflict)?.let { repository!!.load(it.info.id) }
+                } else null
+                if (automatic != null) {
+                    if (mutableWorkspace.value.current?.id == automatic.manifest.info.id) {
+                        check(!edits.busy)
+                        val existing = edits.snapshot().associateBy { it.id }
+                        check(automatic.entries.filter { it.id in existing }.all { existing.getValue(it.id).value.storageId == it.value.storageId })
+                        restoring = true
+                        try { edits.appendExternal(automatic.entries.filter { it.id !in existing }, automatic.manifest.nextId) }
+                        finally { restoring = false }
+                        mutableWorkspace.value = mutableWorkspace.value.copy(current = automatic.manifest.info)
+                        lastRevision = edits.revision
+                        lastStamp = SaveStamp(automatic.manifest.info.id, edits.revision, viewport.position, penColor, penSize, automatic.manifest.info.paper)
+                        publish()
+                    }
+                    mutableWorkspace.value = mutableWorkspace.value.copy(notes = withContext(Dispatchers.IO) { repository!!.list() })
+                    mutableConflicts.value = mutableConflicts.value.copy(items = mutableConflicts.value.items.filterNot { it.key == conflict.key })
+                    mutableMergeReview.value = MergeReviewUi()
+                    return@launch
+                }
+                mutableMergeReview.value = mutableMergeReview.value.copy(saving = false)
+                withContext(Dispatchers.IO) {
+                    val sources = versions.map { store.mergeSources(it, base.takeIf { provisional }) }
+                    val files = if (provisional) (listOf(sources.first().first) + sources.map { it.second }.filter { it != sources.first().first })
+                        .let { if (it.size == 1) it + it.first() else it }
+                        else listOf(sources.first().first) + sources.map { it.second }
+                    prepared = MergeReviewSession.prepareAll(versions, files, cache)
+                }
+                if (token == mergeToken) {
+                    mutableMergeReview.value = MergeReviewUi(conflict, session = prepared)
+                    prepared = null
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) {
+                if (token == mergeToken) mutableMergeReview.value = MergeReviewUi(conflict, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) { prepared?.close() }
+                if (token == mergeToken) mutableConflicts.value = mutableConflicts.value.copy(opening = false)
+            }
+        }
+    }
+    internal fun dismissMerge() {
+        if (mutableMergeReview.value.saving) return
+        mergeToken++; mergeJob?.cancel()
+        val session = mutableMergeReview.value.session
+        mutableMergeReview.value = MergeReviewUi()
+        mutableConflicts.value = mutableConflicts.value.copy(opening = false)
+        if (session != null) viewModelScope.launch(Dispatchers.IO) { session.close() }
+    }
+    internal fun selectMergeCandidates(keys: Set<String>) {
+        val candidates = mutableMergeReview.value.candidates
+        if (keys.size != 3 || mutableConflicts.value.opening || mutableMergeReview.value.saving) return
+        val selected = candidates.filter { it.key in keys }
+        if (selected.size == 3) beginMerge(mutableMergeReview.value.conflict?.takeIf { it.provisional } ?: selected.first(), selected)
+    }
+    internal fun saveResolvedMerge(strength: MergeStrength, decisions: Map<String, Set<Int>>) {
+        val session = mutableMergeReview.value.session ?: return
+        if (mutableMergeReview.value.saving || !session.multiPlan.complete(strength, decisions)) return
+        mutableMergeReview.value = mutableMergeReview.value.copy(saving = true, error = null)
+        val title = session.multiPlan.title(strength, decisions)
+        viewModelScope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    val manifest = repository!!.saveMerge { session.saveResolved(it, strength, decisions, title) }
+                    repository!!.load(manifest.info.id).also { session.conflicts.forEach { conflict -> conflictStore!!.markOpened(conflict, manifest.info.id) } }
+                }
+                enter(loaded)
+                val handled = session.conflicts.map { it.key }.toSet()
+                mutableConflicts.value = mutableConflicts.value.copy(items = mutableConflicts.value.items.filterNot { it.key in handled })
+                mutableMergeReview.value = MergeReviewUi()
+                withContext(Dispatchers.IO) { session.close() }
+            } catch (e: Exception) {
+                mutableMergeReview.value = mutableMergeReview.value.copy(saving = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
+            }
+        }
+    }
+    override fun onCleared() {
+        mergeJob?.cancel(); mutableMergeReview.value.session?.close()
+        super.onCleared()
     }
     internal fun changeStorage(uri: android.net.Uri?) {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
@@ -299,11 +505,12 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || repository == null) return
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
-            try { enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
+            try { notebookStorage?.keepOpen(id); enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
             catch (e: Exception) { fail(e) }
         }
     }
     private fun enter(note: LoadedNote) {
+        notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
         viewport.restore(note.manifest.info.position)
@@ -335,6 +542,12 @@ class EditorViewModel : ViewModel() {
                 }
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
+                previewSaves?.let { it.await(it.state.value.latest) }
+                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                withContext(Dispatchers.IO) {
+                    notebookStorage?.keepOpen(null)
+                    repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() }
+                }
                 restoring = true
                 mutableWorkspace.value = mutableWorkspace.value.copy(current = null, recovered = false)
                 closing = false
@@ -349,7 +562,12 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { action() }; refreshList() } catch (e: Exception) { fail(e) }
+            try {
+                withContext(Dispatchers.IO) { action() }
+                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
+                refreshList()
+            } catch (e: Exception) { fail(e) }
         }
     }
     private fun fail(e: Exception) { mutableWorkspace.value = mutableWorkspace.value.copy(working = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed)) }

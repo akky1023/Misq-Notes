@@ -8,7 +8,7 @@ internal object MisqMigration {
         val folders = local["folders.hwp"] ?: return false
         if (!folders.bytes.contentEquals(File(legacy, "folders.hwp").readBytes())) return false
         local.filterKeys { it.endsWith(".misq") }.forEach { (path, blob) ->
-            File(detached, path).also { it.parentFile!!.mkdirs(); it.writeBytes(blob.bytes) }
+            File(detached, path).also { it.parentFile!!.mkdirs(); blob.copyTo(it) }
         }
         val left = NoteFiles(File(detached, "notes"))
         val right = NoteFiles(File(legacy, "notes"), false)

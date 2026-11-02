@@ -11,7 +11,7 @@ import java.util.UUID
 import org.junit.Assert.*
 import org.junit.Test
 
-/** Reads the copied production data only through the fixed Download test tree. */
+/** Regression coverage for the legacy migration coordinator, using the fixed Download test copy. */
 class MisqStorageIntegrationTest {
     private val instrumentation get() = InstrumentationRegistry.getInstrumentation()
     private val context get() = instrumentation.targetContext
@@ -30,7 +30,7 @@ class MisqStorageIntegrationTest {
             val original = File(parent, "original"); oldReader.restore(old, original)
             val oldNotes = NoteFiles(File(original, "notes"), false)
             val expected = oldNotes.list().associate { it.id to oldNotes.read(it.id).manifest }
-            val storage = NotebookStorage(context, work, scope)
+            val storage = LegacyNotebookStorage(context, work, scope)
             assertTrue(storage.initialize())
             val migrationStart = System.nanoTime()
             storage.initializeRemote()
@@ -67,7 +67,7 @@ class MisqStorageIntegrationTest {
             LibraryPreferencesFile(File(remoteWork, "library.hwp")).write(remoteLibrary.copy(paper = remotePresets.paper))
             SavedColors(File(remoteWork, "palette.hwp")).write(remotePresets.palettes)
             ToolPreferencesFile(File(remoteWork, "tools.hwp")).write(remotePresets.applyTo(ToolPreferences()))
-            val branchStorage = NotebookStorage(context, remoteWork, scope)
+            val branchStorage = LegacyNotebookStorage(context, remoteWork, scope)
             assertFalse(branchStorage.initialize())
             branchStorage.startBackground()
             assertTrue(withTimeout(240000) { branchStorage.awaitSync() })
@@ -85,7 +85,7 @@ class MisqStorageIntegrationTest {
             // A separate library starting from that branch merges against the actual newer remote.
             assertFalse(withTimeout(240000) { branchStorage.awaitSync() })
             withTimeout(240000) { while (!File(remoteWork, ".notes-incoming").isDirectory) delay(50) }
-            val restarted = NotebookStorage(context, remoteWork, scope)
+            val restarted = LegacyNotebookStorage(context, remoteWork, scope)
             assertFalse(restarted.initialize())
             val merged = NoteFiles(File(remoteWork, "notes")).read(target.id).manifest
             assertEquals(initial.strokes.size + 2, merged.strokes.size)
@@ -96,7 +96,7 @@ class MisqStorageIntegrationTest {
             report("sameNoteIndependentEditsMergedAndReloaded=true")
 
             // A local-only restart must retain all migrated notes and hierarchy.
-            val start = System.nanoTime(); val localRestart = NotebookStorage(context, work, scope)
+            val start = System.nanoTime(); val localRestart = LegacyNotebookStorage(context, work, scope)
             assertFalse(localRestart.initialize())
             assertEquals(expected.size, NoteFiles(File(work, "notes")).list().size)
             report("localRestartAndListMs=${(System.nanoTime() - start) / 1_000_000}")

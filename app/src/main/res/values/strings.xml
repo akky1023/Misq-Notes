@@ -207,7 +207,7 @@
     <string name="storage_location" formatted="false">"ノートの保存先"</string>
     <string name="choose_folder" formatted="false">"フォルダを指定"</string>
     <string name="restore_default" formatted="false">"デフォルトに戻す"</string>
-    <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。指定した保存先に、用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
+    <string name="storage_help" formatted="false">"変更すると現在のノートとフォルダを引き継ぎます。外部フォルダを選ぶと、ノートはその場所に保存され、開くときに読み込みます。保存先にアクセスできない間は保存を完了できません。用紙の既定値・パレット・太さのテンプレートも保存します。"</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
     <string name="position_left">左</string>
     <string name="position_right">右</string>
@@ -241,4 +241,49 @@
     <string name="preview_star_rows">星の行のプレビュー</string>
     <string name="preview_star_row">星の行 %1$s</string>
     <string name="preview_no_stars">星のある行はありません</string>
+    <string name="conflicts">コンフリクト一覧</string>
+    <string name="open_conflict_copy">別ノートとして開く</string>
+    <string name="conflict_copy_title">%1$s（別版）</string>
+    <string name="conflict_version_changed">別版が更新されました。一覧を開き直してください。</string>
+    <string name="merge_review">マージ</string>
+    <string name="merge_original_missing">表示中の版が見つかりません。一覧を開き直してください。</string>
+    <string name="merge_manual">手動</string>
+    <string name="merge_cautious">慎重</string>
+    <string name="merge_standard">標準</string>
+    <string name="merge_aggressive">積極的</string>
+    <string name="merge_strength">自動マージ：%1$s</string>
+    <string name="merge_side_by_side">左右比較</string>
+    <string name="merge_fit">表示を戻す</string>
+    <string name="merge_previous">前へ</string>
+    <string name="merge_canvas">マージ比較キャンバス %1$s</string>
+    <string name="merge_options">マージ設定</string>
+    <string name="merge_view_mode">表示切り替え</string>
+    <string name="merge_original_version">表示中の版</string>
+    <string name="merge_other_version">%1$s</string>
+    <string name="merge_final_review">マージの最終確認</string>
+    <string name="merge_step_number">変更 %1$s / %2$s</string>
+    <string name="merge_back_to_steps">変更へ戻る</string>
+    <string name="merge_selected_preview">選択中の結果</string>
+    <string name="merge_choose_versions">採用する版を選ぶ</string>
+    <string name="merge_selection_count">採用 %1$s件</string>
+    <string name="merge_multi_allowed">複数選択で併合します。同一内容の線は1本だけ残します。</string>
+    <string name="merge_single_required">削除と変更、ノート名、用紙は1つの版を選んでください。</string>
+    <string name="merge_finalize">保存</string>
+    <string name="merge_confirm_step">次へ</string>
+    <string name="merge_select_version">採用：%1$s</string>
+    <string name="merge_pick_three">比較する別版を3つ選択</string>
+    <string name="merge_pick_count">表示中の版に加えて %1$s / 3 件を選択</string>
+    <string name="merge_compare_version">比較対象：%1$s</string>
+    <string name="merge_start_comparison">比較を開始</string>
+    <string name="merge_metadata_review">ノート名・用紙の競合</string>
+    <string name="merge_metadata_name">ノート名</string>
+    <string name="merge_metadata_paper">用紙</string>
+    <string name="merge_metadata_name_choice">%1$sのノート名を選択</string>
+    <string name="merge_metadata_paper_choice">%1$sの用紙を選択</string>
+    <string name="merge_metadata_continue">筆跡の比較へ</string>
+    <string name="merge_metadata_to_final">最終確認へ</string>
+    <string name="merge_metadata_revisit">名前・用紙を選び直す</string>
+    <string name="merge_provisional_version">最新版 (%1$s)</string>
+    <string name="conflict_provisional_help">最終更新日時が最も新しい版を仮表示しています。編集の保存またはマージの確定で保存されます。</string>
+    <string name="note_provisional">コンフリクト有</string>
 </resources>

@@ -1,6 +1,7 @@
 package jp.handwriting.note.storage
 
 import java.util.Base64
+import java.io.File
 import org.json.JSONObject
 
 /** One visible .misq per notebook; immutable recovery records make interrupted SAF writes safe. */
@@ -31,6 +32,21 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         ?: if (name.startsWith("blob-")) files.digest(name) == hash else super.matches(name, hash)
     override fun write(name: String, bytes: ByteArray) {
         require(ArchiveLayout.complete(name, bytes)); staged[name] = bytes
+    }
+    override fun writeFile(name: String, file: File) {
+        if (!file.name.endsWith(".misq") || !name.startsWith("blob-")) { write(name, file.readBytes()); return }
+        require(NotebookArchive.digest(file) == name.removePrefix("blob-"))
+        // Immutable blobs may precede publication; an interrupted upload cannot become current.
+        if (name in files.names()) {
+            if (files.digest(name) == name.removePrefix("blob-")) return
+            files.delete(name) // Repair an interrupted, invalid blob using its exact content hash.
+        }
+        file.inputStream().use { files.writeStream(name, it) }
+        require(files.digest(name) == name.removePrefix("blob-"))
+    }
+    override fun copyTo(name: String, file: File) {
+        staged[name]?.let { file.writeBytes(it); return }
+        files.openRead(name).use { input -> file.outputStream().use { input.copyTo(it, 8192) } }
     }
     override fun delete(name: String) {
         // Cleanup follows verified publication. Existing revisions remain usable until then.
@@ -99,7 +115,9 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         commits.filter { it !in keep }.forEach { files.delete(it) }
         // Old blob copies are deliberately retained in the test format, pending safe compaction.
         val active = refs(parse(files.read(keep.first()))).keys.filter { it.endsWith(".misq") }.map { it.substringAfterLast('/') }.toSet()
-        names.filter { it.matches(NOTE) && it !in active }.forEach { files.delete(it) }
+        val owned = keep.flatMap { refs(parse(files.read(it))).keys }.filter { it.endsWith(".misq") }.map { it.substringAfterLast('/') }.toSet()
+        // Other tools may give a competing version another UUID filename. Unknown files are not garbage.
+        names.filter { it.matches(NOTE) && it in owned && it !in active }.forEach { files.delete(it) }
     }
     private fun refs(json: JSONObject) = json.getJSONObject("files").let { obj -> obj.keys().asSequence().associateWith { obj.getString(it) } }
     companion object {

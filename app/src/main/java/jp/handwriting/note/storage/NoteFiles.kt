@@ -19,18 +19,42 @@ data class StrokeRef(val id: Long, val storageId: String)
 data class NoteManifest(val info: NoteInfo, val strokes: List<StrokeRef>, val nextId: Long = 1)
 data class ReadManifest(val manifest: NoteManifest, val recovered: Boolean)
 data class NoteSummary(val id: String, val title: String, val updatedAt: Long, val strokes: Int, val problem: String? = null,
-    val createdAt: Long = updatedAt, val thumbnail: String? = null, val paper: NotePaper = NotePaper())
+    val createdAt: Long = updatedAt, val thumbnail: String? = null, val paper: NotePaper = NotePaper(), val provisional: Boolean = false)
+
+internal interface NoteBacking {
+    fun contains(id: String): Boolean
+    fun ensure(id: String)
+    fun summaries(): List<NoteSummary>
+    fun deleted(id: String)
+    fun preview(id: String): File
+}
 
 /** IO-thread confined. Each manifest is committed only after all referenced stroke blobs exist. */
 class NoteFiles(directory: File, private val singleFile: Boolean = true) {
+    internal var backing: NoteBacking? = null
     private val root = directory.absoluteFile.normalize().also { check(it.isDirectory || it.mkdirs()) }
+    internal val directory get() = root
     private val known = mutableMapOf<String, MutableSet<String>>()
     private val documents = mutableMapOf<String, MisqFile>()
+    private data class ContentKey(val stamp: NoteFileStamp, val key: String)
+    private val contentKeys = mutableMapOf<File, ContentKey>()
+    private fun contentKey(file: File): String {
+        val stamp = file.noteStamp()
+        return contentKeys[file]?.takeIf { stamp.identity != null && it.stamp == stamp }?.key
+            ?: MisqFile(file, readOnlyAlias = true).contentKey().also { contentKeys[file] = ContentKey(stamp, it) }
+    }
     private fun uuid(id: String): String { require(UUID.fromString(id).toString() == id); return id }
     private fun folder(id: String) = File(root, uuid(id))
     private fun manifestFile(id: String) = File(folder(id), "manifest.hwn")
     private fun strokeFile(note: String, stroke: String) = File(folder(note), "${uuid(stroke)}.ink")
-    internal fun document(id: String) = documents.getOrPut(uuid(id)) { MisqFile(File(root, "$id.misq")) }
+    internal fun document(id: String): MisqFile {
+        uuid(id)
+        if (!File(root, "$id.misq").exists()) {
+            documents.remove(id)
+            backing?.ensure(id)
+        }
+        return documents.getOrPut(id) { MisqFile(File(root, "$id.misq")) }
+    }
     private fun packed(id: String) = singleFile && document(id).file.exists()
     fun thumbnail(id: String) = File(folder(id), "thumbnail-v2.png")
     fun thumbnailIsCurrent(id: String): Boolean {
@@ -53,6 +77,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
     fun invalidateThumbnail(id: String) { thumbnail(id).takeIf { it.exists() }?.setLastModified(0) }
     internal fun storedThumbnail(id: String): File? {
+        if (backing?.contains(id) == true && !File(root, "$id.misq").exists()) return backing!!.preview(id)
         if (!packed(id)) return thumbnail(id).takeIf { it.exists() }
         val bytes = document(id).thumbnail() ?: return null
         val target = thumbnail(id)
@@ -69,19 +94,37 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         save(note) { error("Empty note cannot need a stroke") }
         return note
     }
-    fun list(): List<NoteSummary> = root.listFiles().orEmpty().mapNotNull { file ->
-        val id = if (file.isFile && file.extension == "misq") file.nameWithoutExtension else if (file.isDirectory) file.name else return@mapNotNull null
+    fun list(): List<NoteSummary> = (backing?.summaries().orEmpty() + root.listFiles().orEmpty().mapNotNull { file ->
+        val id = if (file.isFile && file.extension == "misq") file.nameWithoutExtension else if (file.isDirectory && File(file, "manifest.hwn").exists()) file.name else return@mapNotNull null
         id.takeIf { runCatching { uuid(it) }.isSuccess }
-    }.distinct().map { id ->
+    }.distinct().mapNotNull { id ->
         try {
-            if (packed(id)) return@map document(id).summary().copy(thumbnail = thumbnail(id).takeIf { it.exists() }?.path)
+            if (packed(id)) return@mapNotNull document(id).summary().copy(thumbnail = thumbnail(id).takeIf { it.exists() }?.path)
             val m = read(id).manifest
             NoteSummary(m.info.id, m.info.title, m.info.updatedAt, m.strokes.size, createdAt = m.info.createdAt,
                 thumbnail = thumbnail(m.info.id).takeIf { it.exists() }?.path, paper = m.info.paper)
         } catch (_: IOException) {
+            val alias = runCatching { MisqFile(document(id).file, readOnlyAlias = true).summary() }.getOrNull()
+            if (alias != null && alias.id != id) return@mapNotNull null
             NoteSummary(id, AppMessages.text(R.string.unreadable_note), document(id).file.lastModified(), 0, AppMessages.text(R.string.note_data_read_failed))
         }
-    }.sortedByDescending { it.updatedAt }
+    }).associateBy { it.id }.values.sortedByDescending { it.updatedAt }
+
+    /** Missing working files are represented by the newest remaining version, without publishing it. */
+    internal fun hasWorkingCopy(id: String) = backing?.contains(id) == true || document(id).file.exists() || manifestFile(id).exists()
+    internal fun provisionalVersions(): Map<String, Pair<File, NoteSummary>> {
+        val candidates = root.listFiles().orEmpty().filter { it.isFile && it.extension.equals("misq", true) }
+        contentKeys.keys.retainAll(candidates.toSet())
+        return candidates.mapNotNull { file ->
+            runCatching {
+                val summary = MisqFile(file, readOnlyAlias = true).summary()
+                if (hasWorkingCopy(summary.id)) null
+                else Triple(file, summary.copy(provisional = true,
+                    thumbnail = thumbnail(summary.id).takeIf { it.exists() }?.path), contentKey(file))
+            }.getOrNull()
+        }.sortedWith(compareByDescending<Triple<File, NoteSummary, String>> { it.second.updatedAt }.thenBy { it.third })
+            .distinctBy { it.second.id }.associate { it.second.id to (it.first to it.second) }
+    }
 
     fun read(id: String): ReadManifest {
         if (packed(id)) return document(id).readManifest()
@@ -165,8 +208,12 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         save(note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))) { error("Existing stroke missing") }
     }
     fun delete(id: String) {
-        if (packed(id)) {
-            val file = document(id).file
+        backing?.deleted(uuid(id))
+        // A deletion does not need to download the external notebook first.
+        documents.remove(id)
+        val packedFile = File(root, "$id.misq")
+        if (singleFile && packedFile.exists()) {
+            val file = packedFile
             val trash = File(root, ".trash-${uuid(id)}-${UUID.randomUUID()}")
             Files.move(file.toPath(), trash.toPath(), ATOMIC_MOVE)
             trash.delete()

@@ -50,6 +50,16 @@ class OrderedEdits<T : Any>(private val historyLimit: Int = 256) {
         onContentChange(entries, removed)
         onChange()
     }
+    /** External append keeps existing local undo/redo entries intact. */
+    internal fun appendExternal(entries: List<Entry<T>>, next: Long) {
+        check(!busy)
+        require(entries.all { it.id >= nextId && it.id < next } && entries.map { it.id }.distinct().size == entries.size)
+        if (entries.isEmpty()) return
+        apply(emptyList(), entries)
+        nextId = next
+        revision++
+        onChange()
+    }
 
     fun reserveStroke(): Long = nextId++.also { pending[it] = Add(); onChange() }
     fun resolveStroke(id: Long, value: T) {

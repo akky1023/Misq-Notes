@@ -28,7 +28,6 @@ import androidx.ink.authoring.InProgressStrokesFinishedListener
 import androidx.ink.authoring.InProgressStrokesView
 import androidx.ink.brush.Brush
 import androidx.ink.brush.InputToolType
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
@@ -41,9 +40,9 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val strokeToView = Matrix()
     private val viewToStroke = Matrix()
     private var scale = 1f
-    private val renderer = CanvasStrokeRenderer.create()
+    private val renderer = InkStrokeRenderer.create()
     // Recoloring a shared mesh for the flash must not modify resources in completed display lists.
-    private val flashRenderer = CanvasStrokeRenderer.create()
+    private val flashRenderer = InkStrokeRenderer.create()
     private val strokeFidelity = StrokeFidelityCache()
     private val strokeCache = StrokeRenderCache(renderAppendLimit)
     private data class RetentionState(val revision: Long, val position: ViewPosition, val width: Int,
@@ -202,7 +201,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             if (compact && strokeCache.pendingCompaction) postOnAnimation(compactStrokes)
         }
     }
-    private val ink = InProgressStrokesView(context)
+    private val ink = InProgressStrokesView(context).also(InkStrokeRenderer::configure)
     private var predictor = MotionEventPredictor.newInstance(this)
     private var predictionValid = true
     private var pointerId: Int? = null

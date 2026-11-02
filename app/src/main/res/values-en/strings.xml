@@ -207,7 +207,7 @@
     <string name="storage_location" formatted="false">"Note storage location"</string>
     <string name="choose_folder" formatted="false">"Choose folder"</string>
     <string name="restore_default" formatted="false">"Use default"</string>
-    <string name="storage_help" formatted="false">"Your notes and folders move with you. Paper defaults, color palettes and width presets are also saved in the selected location."</string>
+    <string name="storage_help" formatted="false">"Your notes and folders move with you. When you choose an external folder, notes are stored there and downloaded when opened. Saving cannot finish while that folder is unavailable. Paper defaults, color palettes and width presets are also saved there."</string>
     <string name="app_name" formatted="false">"Misq notes"</string>
     <string name="position_left">Left</string>
     <string name="position_right">Right</string>
@@ -241,4 +241,49 @@
     <string name="preview_star_rows">Preview of rows with stars</string>
     <string name="preview_star_row">Star row %1$s</string>
     <string name="preview_no_stars">No rows with stars</string>
+    <string name="conflicts">Conflicts</string>
+    <string name="open_conflict_copy">Open as a separate note</string>
+    <string name="conflict_copy_title">%1$s (other version)</string>
+    <string name="conflict_version_changed">This version has changed. Reopen the conflicts list.</string>
+    <string name="merge_review">Merge</string>
+    <string name="merge_original_missing">The displayed version is no longer available. Reopen the list.</string>
+    <string name="merge_manual">Manual</string>
+    <string name="merge_cautious">Cautious</string>
+    <string name="merge_standard">Standard</string>
+    <string name="merge_aggressive">Aggressive</string>
+    <string name="merge_strength">Automatic merge: %1$s</string>
+    <string name="merge_side_by_side">Side by side</string>
+    <string name="merge_fit">Reset view</string>
+    <string name="merge_previous">Previous</string>
+    <string name="merge_canvas">Merge comparison canvas %1$s</string>
+    <string name="merge_options">Merge options</string>
+    <string name="merge_view_mode">Switch view</string>
+    <string name="merge_original_version">Displayed version</string>
+    <string name="merge_other_version">%1$s</string>
+    <string name="merge_final_review">Final merge review</string>
+    <string name="merge_step_number">Change %1$s / %2$s</string>
+    <string name="merge_back_to_steps">Back to changes</string>
+    <string name="merge_selected_preview">Selected result</string>
+    <string name="merge_choose_versions">Choose versions</string>
+    <string name="merge_selection_count">Selected %1$s</string>
+    <string name="merge_multi_allowed">Select multiple versions to combine them. Identical strokes are kept once.</string>
+    <string name="merge_single_required">Choose one version for deletion conflicts, titles, and paper settings.</string>
+    <string name="merge_finalize">Save</string>
+    <string name="merge_confirm_step">Next</string>
+    <string name="merge_select_version">Select: %1$s</string>
+    <string name="merge_pick_three">Choose three versions to compare</string>
+    <string name="merge_pick_count">%1$s / 3 selected, plus the displayed version</string>
+    <string name="merge_compare_version">Compare: %1$s</string>
+    <string name="merge_start_comparison">Start comparison</string>
+    <string name="merge_metadata_review">Note title and paper conflicts</string>
+    <string name="merge_metadata_name">Note title</string>
+    <string name="merge_metadata_paper">Paper</string>
+    <string name="merge_metadata_name_choice">Use the title from %1$s</string>
+    <string name="merge_metadata_paper_choice">Use the paper from %1$s</string>
+    <string name="merge_metadata_continue">Compare strokes</string>
+    <string name="merge_metadata_to_final">Review final result</string>
+    <string name="merge_metadata_revisit">Review title and paper</string>
+    <string name="merge_provisional_version">Latest (%1$s)</string>
+    <string name="conflict_provisional_help">The most recently updated version is shown provisionally. It is saved when you save an edit or confirm the merge.</string>
+    <string name="note_provisional">Conflicts</string>
 </resources>

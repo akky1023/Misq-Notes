@@ -18,13 +18,14 @@ import kotlinx.coroutines.withContext
 
 /** Usable local-first UI on a copy. External checking is read-only; no import or sync writes. */
 class ExperimentActivity : MainActivity() {
+    private val stressTree = android.net.Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload%2FMisqStorageStress-20261102")
     internal lateinit var experimentModel: EditorViewModel
     internal var verification: Job? = null
     internal var verificationSucceeded = false
     internal var verificationFailure: Exception? = null
     private val picker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
-        if (result.resultCode == RESULT_OK && (uri == RealDataExperiment.tree || uri == MisqTestCopy.tree)) {
+        if (result.resultCode == RESULT_OK && (uri == RealDataExperiment.tree || uri == MisqTestCopy.tree || uri == stressTree)) {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             getSharedPreferences("startup-experiment", MODE_PRIVATE).edit().putBoolean("externalGranted", true).apply()
         }
@@ -32,8 +33,12 @@ class ExperimentActivity : MainActivity() {
     }
     override fun startNotebook(model: EditorViewModel) {
         experimentModel = model
-        if (intent.action == "jp.handwriting.note.CHOOSE_EXPERIMENT_COPY" || intent.action == "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY") {
-            val tree = if (intent.action == "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY") MisqTestCopy.tree else RealDataExperiment.tree
+        if (intent.action == "jp.handwriting.note.CHOOSE_EXPERIMENT_COPY" || intent.action == "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY" || intent.action == "jp.handwriting.note.CHOOSE_STORAGE_STRESS_COPY") {
+            val tree = when (intent.action) {
+                "jp.handwriting.note.CHOOSE_STORAGE_STRESS_COPY" -> stressTree
+                "jp.handwriting.note.CHOOSE_MISQ_TEST_COPY" -> MisqTestCopy.tree
+                else -> RealDataExperiment.tree
+            }
             picker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).putExtra(DocumentsContract.EXTRA_INITIAL_URI,
                 DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))))
             return
