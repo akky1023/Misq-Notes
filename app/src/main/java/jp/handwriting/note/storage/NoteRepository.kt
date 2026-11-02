@@ -9,6 +9,7 @@ import androidx.ink.strokes.StrokeInputBatch
 import jp.handwriting.note.editor.EditorStroke
 import jp.handwriting.note.editor.OrderedEdits
 import jp.handwriting.note.editor.InkBrushes
+import jp.handwriting.note.editor.InkStrokeRenderer
 import jp.handwriting.note.editor.PressureCurve
 import jp.handwriting.note.editor.PressureBasis
 import java.io.*
@@ -16,7 +17,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.RectF
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.core.graphics.createBitmap
 import jp.handwriting.note.editor.PaperRenderer
 import jp.handwriting.note.editor.EmbeddedImages
@@ -32,7 +32,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     private val persist: (() -> Unit) -> Unit = { it() }) {
     private val thumbnailKeys = mutableMapOf<String, Pair<NotePaper, List<String>>>()
     // Retain Ink's outline cache between saves instead of rebuilding the entire preview per pen lift.
-    private val thumbnailRenderer by lazy { CanvasStrokeRenderer.create() }
+    private val thumbnailRenderer by lazy { InkStrokeRenderer.create() }
     private var recent: LoadedNote? = null
     private val provisionalLoaded = mutableMapOf<String, NoteManifest>()
     private fun provisional(id: String) = if (files.hasWorkingCopy(id)) null else

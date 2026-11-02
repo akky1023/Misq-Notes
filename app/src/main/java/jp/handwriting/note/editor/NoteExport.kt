@@ -5,7 +5,6 @@ import jp.handwriting.note.R
 
 import android.graphics.*
 import android.graphics.pdf.PdfDocument
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.withMatrix
 import androidx.core.graphics.withSave
@@ -88,7 +87,7 @@ internal object NoteExport {
         val matrix = Matrix().apply { setValues(floatArrayOf(scale, 0f, -bounds.left * scale, 0f, scale, -bounds.top * scale, 0f, 0f, 1f)) }
         canvas.withMatrix(matrix) {
             PaperRenderer.draw(this, paper, bounds, if (previewPaper) 1f else scale)
-            val renderer = CanvasStrokeRenderer.create()
+            val renderer = InkStrokeRenderer.create()
             strokes.forEach { stroke -> checkpoint(); stroke.bounds?.let { b ->
                 val factor = if (stroke.storageId in enlargedStrokes && stroke.image == null) 1.5f else 1f
                 val outlineWidth = if (factor != 1f) 2f / (scale * factor) else 0f

@@ -1,7 +1,6 @@
 package jp.handwriting.note.editor
 
 import android.graphics.*
-import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.geometry.MutableVec
 import jp.handwriting.note.storage.*
 import java.io.File
@@ -79,7 +78,7 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
             step?.area?.let { area -> canvas.drawRect(area.left - 8f, area.top - 8f, area.right + 8f, area.bottom + 8f,
                 Paint().apply { color = Color.argb(60, 100, 175, 255) }) }
             val visibleKeys = spatial.query(StrokeIndex.Bounds(visible.left, visible.top, visible.right, visible.bottom)).map { it.second.key }.toSet()
-            val renderer = CanvasStrokeRenderer.create(); val job = currentCoroutineContext()
+            val renderer = InkStrokeRenderer.create(); val job = currentCoroutineContext()
             fun outline(value: MergeValue, color: Int, dashed: Boolean) {
                 if (value.key !in visibleKeys) return
                 job.ensureActive()
