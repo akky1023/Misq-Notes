@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/akky1023/Misq-Notes/compare/v0.3.1...v0.4.0) (2026-11-02)
+
+
+### 機能追加
+
+* マージ機能の追加 ([1c5524d](https://github.com/akky1023/Misq-Notes/commit/1c5524d2cd40d2611596d3ab1931a1999d53944a))
+* 外部保存をガチ外部保存に変更 ([8dee38f](https://github.com/akky1023/Misq-Notes/commit/8dee38fa0dd1481799810499e9486f609c2df6d3))
+
+
+### 修正
+
+* 外部ストレージに保存する際クラッシュする問題の修正 ([2eafc92](https://github.com/akky1023/Misq-Notes/commit/2eafc92cc1e5965fb7b8a848559ce6a58795f040))
+* 筆跡の欠けができる問題を修正 ([bb45fb1](https://github.com/akky1023/Misq-Notes/commit/bb45fb1cd3a0958e4be9ac999ca2a70b88f7a596))
+
 ## [0.3.1](https://github.com/akky1023/Misq-Notes/compare/v0.3.0...v0.3.1) (2026-10-28)
 
 
