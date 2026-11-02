@@ -11,6 +11,30 @@ import org.junit.rules.TemporaryFolder
 
 class MisqFileTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun clockSkewFixturePreservesSharedAncestorsAndCanBeResolved() {
+        val (files, empty) = note()
+        val old = ref(1)
+        val base = empty.copy(strokes = listOf(old), nextId = 2)
+        files.save(base) { byteArrayOf(1) }
+        val a = copy(files.document(empty.info.id))
+        val b = copy(a)
+        val originalEvents = a.index().events
+        a.save(base.copy(strokes = emptyList())) { error("deleted") }
+        val moved = ref(1)
+        b.save(base.copy(strokes = listOf(moved))) { byteArrayOf(2) }
+        a.preserveEventTimes(mapOf(old.storageId to 1L))
+        b.preserveEventTimes(mapOf(old.storageId to 4102444800000L))
+        for (branch in listOf(a, b)) {
+            assertEquals(originalEvents, branch.index().events.filter { event -> originalEvents.any { it.version == event.version } })
+        }
+        assertEquals(1L, a.index().events.last().at)
+        assertEquals(4102444800000L, b.index().events.last().at)
+        val target = copy(a)
+        target.resolve(b.readManifest().manifest, listOf(a, b), b.index().entities)
+        target.validate()
+        assertEquals(listOf(moved), target.readManifest().manifest.strokes)
+        assertArrayEquals(byteArrayOf(2), target.stroke(moved.storageId))
+    }
     private fun ref(id: Long) = StrokeRef(id, UUID.randomUUID().toString())
     private fun note(): Pair<NoteFiles, NoteManifest> {
         val files = NoteFiles(temp.newFolder())

@@ -114,8 +114,10 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     }
     @Synchronized fun delete(id: String) = persist {
         val clean = listCache?.changing()
-        files.delete(id)
+        files.deleteNotebook(id)
         listCache?.deleted(id, clean == true)
+        provisionalLoaded.remove(id)
+        thumbnailKeys.remove(id)
         if (recent?.manifest?.info?.id == id) recent = null
     }
     @Synchronized fun preview(id: String): File {

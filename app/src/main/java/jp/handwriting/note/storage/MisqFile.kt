@@ -235,12 +235,15 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         open().use { output -> commit(output, index.copy(generation = index.generation + 1,
             thumbnail = append(output, png), thumbnailKey = key(index.manifest))) }
     }
-    /** Preserve original timestamps when preparing an imported history or a test fixture. */
+    /** Adjust current heads only, leaving their ancestors intact. */
     internal fun preserveEventTimes(times: Map<String, Long>) {
         check(!readOnlyAlias)
         val current = index()
+        val heads = current.events.groupBy { it.entity }.values.flatMap(::frontier).map { it.version }.toSet()
         open().use { output -> commit(output, current.copy(generation = current.generation + 1,
-            events = current.events.map { event -> event.copy(at = times[event.entity] ?: event.at) })) }
+            events = current.events.map { event ->
+                if (event.version in heads) event.copy(at = times[event.entity] ?: event.at) else event
+            })) }
     }
     private fun upgradeLegacy() {
         if (file.exists() && file.length() >= 8 && RandomAccessFile(file, "r").use { it.readLong() == LEGACY_MAGIC }) rewrite(index())

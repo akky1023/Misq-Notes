@@ -207,6 +207,19 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         val note = read(id).manifest
         save(note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))) { error("Existing stroke missing") }
     }
+    /** User deletion removes aliases too, otherwise a missing original reappears provisionally. */
+    internal fun deleteNotebook(id: String) {
+        uuid(id)
+        val versions = root.listFiles().orEmpty().filter { file ->
+            file.isFile && file.extension.equals("misq", true) &&
+                runCatching { MisqFile(file, readOnlyAlias = true).readManifest().manifest.info.id == id }.getOrDefault(false)
+        }
+        delete(id)
+        versions.filter { it.exists() }.forEach { file ->
+            check(file.delete()) { "Unable to delete notebook version: ${file.name}" }
+            contentKeys.remove(file)
+        }
+    }
     fun delete(id: String) {
         backing?.deleted(uuid(id))
         // A deletion does not need to download the external notebook first.

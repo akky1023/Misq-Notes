@@ -215,7 +215,9 @@ class CombinedConflictSampleDeviceTest {
             val writer = if (version == 0) files.document(base.info.id) else MisqFile(branchFiles[version - 1])
             writer.save(note) { payloads.getValue(it) }
             val clockEntity = baseline.getValue(targetIds.getValue(10)).storageId
-            writer.preserveEventTimes(mapOf(clockEntity to if (version == 0) 1L else if (version == 1) 4102444800000L else System.currentTimeMillis()))
+            // Only these branches changed case 10; untouched branches retain the common history.
+            if (version <= 2) writer.preserveEventTimes(mapOf(clockEntity to
+                if (version == 0) 1L else if (version == 1) 4102444800000L else System.currentTimeMillis()))
             outputs += if (version == 0) writer.file else File(stage, "総合サンプル-別版$version-${base.info.id.take(8)}.misq").also { writer.file.copyTo(it) }
         }
         val checker = NoteConflicts(stage, File(stage, "check"))
@@ -230,6 +232,12 @@ class CombinedConflictSampleDeviceTest {
             assertTrue(session.multiPlan.changes.any { it.kind == MergeKind.ADD })
             val sameEntity = baseline.getValue(targetIds.getValue(8)).storageId
             assertFalse(session.multiPlan.changes.any { it.key == sameEntity })
+            val resolved = File(stage, "resolved").apply { check(mkdirs()) }
+            outputs.first().copyTo(File(resolved, outputs.first().name))
+            val strength = MergeStrength.CAUTIOUS
+            val decisions = session.multiPlan.steps(strength).associate { it.key to setOf(0) }
+            val result = session.saveResolved(resolved, strength, decisions, session.multiPlan.title(strength, decisions))
+            MisqFile(File(resolved, "${result.info.id}.misq")).validate()
         }
         val readme = "$title\n\n元ノート1冊と別版4件です。比較する別版を3件選びます。\n" + labels.mapIndexed { i, label -> "%02d %s".format(i + 1, label) }.joinToString("\n") +
             "\n\n冒頭でノート名と用紙を選択します。各見出し画像は全版で共通です。\n08は同じ変更なのでマージ処理には現れません。\n元ノートID: ${base.info.id}\n"
