@@ -1091,11 +1091,6 @@ class EditorViewModel : ViewModel() {
         }
         publish()
     }
-    internal fun requestFullContent(): Boolean {
-        if (lazyBase == null) return false
-        startBackgroundLoading()
-        return true
-    }
     internal fun prepareSpaceInsertion(y: Float, ready: (Boolean) -> Unit) {
         viewModelScope.launch {
             try { hydrateAll(); ready(beginSpaceInsertion(y)) }

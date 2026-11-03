@@ -35,6 +35,38 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NotePreviewTest {
+    @Test fun changingSnapshotsDoNotCancelVisibleBandRendering(): Unit = runBlocking {
+        val completed = java.util.concurrent.atomic.AtomicInteger()
+        val latest = java.util.concurrent.atomic.AtomicInteger(-1)
+        var document by mutableStateOf<PreviewDocument?>(null)
+        fun snapshot(version: Int) = PreviewDocument(1000f, emptyList()) {
+            // Slower than incoming background hydration snapshots.
+            delay(250)
+            Bitmap.createBitmap(36, 36, Bitmap.Config.ARGB_8888).also {
+                it.eraseColor(0xFF0000FF.toInt())
+                latest.set(version)
+                completed.incrementAndGet()
+            }
+        }
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                document = snapshot(0)
+                activity.setContent {
+                    androidx.compose.material3.MaterialTheme { NotePreview(document, StrokeIndex.Bounds(0f, 0f, 1000f, 500f),
+                        busy = false, modifier = Modifier.fillMaxSize(), onMove = { _, _ -> }) }
+                }
+            }
+            // Updates continue for longer than a render. Cancellation on each new document
+            // would leave the preview blank throughout this interval.
+            repeat(40) { version ->
+                withContext(Dispatchers.Main) { document = snapshot(version + 1) }
+                delay(50)
+            }
+            assertTrue("Preview must finish frames while snapshots keep arriving", completed.get() > 0)
+            withTimeout(5000) { while (latest.get() != 40) delay(50) }
+        }
+    }
+
     private fun line(y: Float, color: Int): EditorStroke {
         val input = MutableStrokeInputBatch().add(InputToolType.STYLUS, 100f, y, 0, pressure = 1f)
             .add(InputToolType.STYLUS, 900f, y, 100, pressure = 1f)

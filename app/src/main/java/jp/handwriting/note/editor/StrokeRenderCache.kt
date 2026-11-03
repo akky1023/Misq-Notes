@@ -8,7 +8,7 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     init { require(appendLimit in 1..GROUP_SIZE) }
     companion object { internal const val GROUP_SIZE = 64; internal const val APPEND_SIZE = 8 }
     private data class Item(val stroke: EditorStroke, val selected: Boolean)
-    private data class RecordedNode(val node: RenderNode, val position: ViewPosition) {
+    private data class RecordedNode(val node: RenderNode, val position: ViewPosition, val scale: Float) {
         fun discard() = node.discardDisplayList()
     }
     private data class Group(val nodes: List<RecordedNode>, val items: List<Item>, val offset: WorldPoint, val tail: List<Item> = emptyList(), val scale: Float = 1f)
@@ -16,8 +16,6 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     private val groups = mutableMapOf<GroupId, Group>()
     private var visibleGroups = emptySet<GroupId>()
     private var viewport: ViewPosition? = null
-    private var width = 0
-    private var height = 0
     internal var recordedGroups = 0
         private set
     internal val pendingCompaction get() = groups.values.any { it.nodes.size > 1 }
@@ -37,8 +35,10 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             entries.forEach { drawStroke(canvas, it.second, selected(it.second)) }
             return
         }
-        if (viewport?.zoom != position.zoom || width != viewWidth || height != viewHeight) {
-            clear(); viewport = position; width = viewWidth; height = viewHeight
+        // Preview opening/closing changes the editor width every frame. The recorded strokes
+        // are complete (unclipped), so resize their display lists instead of rebuilding all ink.
+        if (viewport?.zoom != position.zoom) {
+            clear(); viewport = position
         }
         // Operation IDs are stable under erase/undo; deleting a stroke never shifts later groups.
         // Stars have individual display lists. Split surrounding normal strokes into stable runs
@@ -65,7 +65,7 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             try { items.forEach { drawStroke(recording, it.stroke, it.selected) } }
             finally { node.endRecording() }
             recordedGroups++
-            return RecordedNode(node, position)
+            return RecordedNode(node, position, viewWidth / Viewport.WIDTH * position.zoom)
         }
         for ((id, strokes) in visible) {
             val items = strokes.map { Item(it.second, selected(it.second)) }
@@ -104,6 +104,8 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
                 canvas.save()
                 canvas.translate((recorded.position.left - position.left) * scale,
                     (recorded.position.top - position.top) * scale)
+                val resize = scale / recorded.scale
+                canvas.scale(resize, resize)
                 canvas.drawRenderNode(recorded.node)
                 canvas.restore()
             }

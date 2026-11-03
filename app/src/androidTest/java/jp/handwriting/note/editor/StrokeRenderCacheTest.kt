@@ -81,7 +81,7 @@ class StrokeRenderCacheTest {
         } finally { cache.clear(); target.discardDisplayList() }
     }
 
-    @Test fun panningReusesGroupsAndAppendedTailsUntilZoomOrSizeChanges() {
+    @Test fun panningAndPreviewResizingReuseGroupsAndAppendedTailsUntilZoomChanges() {
         val ink = ink(); val cache = StrokeRenderCache(); val target = RenderNode("pan-test")
         var entries = (1L..300L).map { it to EditorStroke(ink) }
         var width = 1000
@@ -106,9 +106,11 @@ class StrokeRenderCacheTest {
             assertEquals(initial + 2, cache.recordedGroups)
             draw(ViewPosition(3f, 120f, 900f))
             assertEquals(initial * 2 + 2, cache.recordedGroups)
-            width = 800
-            draw(ViewPosition(3f, 120f, 900f))
-            assertEquals(initial * 3 + 2, cache.recordedGroups)
+            for (size in listOf(980, 900, 800, 700, 600, 700, 800, 900, 1000)) {
+                width = size
+                draw(ViewPosition(3f, 120f, 900f))
+                assertEquals("Preview resizing must not record all strokes again", initial * 2 + 2, cache.recordedGroups)
+            }
         } finally { cache.clear(); target.discardDisplayList() }
     }
 

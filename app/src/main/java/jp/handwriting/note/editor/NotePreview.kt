@@ -46,6 +46,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.conflate
 import kotlin.math.ceil
 
 internal class PreviewDocument(val bottom: Float, val rows: List<StarPreviewRows.Row>,
@@ -60,36 +61,52 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
     val note = workspace.current ?: return
     var document by remember(note.id) { mutableStateOf<PreviewDocument?>(null) }
     val starCache = remember(note.id) { mutableMapOf<String, StrokeIndex.Bounds?>() }
-    LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy, renderContent) {
-        if (ui.busy || !renderContent) return@LaunchedEffect
-        delay(300)
-        if (model.requestFullContent()) return@LaunchedEffect
-        val entries = model.edits.snapshot()
-        val bottom = maxOf(1000f, model.contentBottom + 24f)
-        document = withContext(Dispatchers.Default) {
-            starCache.keys.retainAll(entries.map { it.value.storageId }.toSet())
-            val stars = entries.mapNotNull { entry ->
-                currentCoroutineContext().ensureActive()
-                val stroke = entry.value
-                if (!starCache.containsKey(stroke.storageId)) {
-                    val ink = stroke.inkOrNull
-                    val bounds = stroke.bounds
-                    starCache[stroke.storageId] = if (ink != null && bounds != null &&
-                        SingleStrokeStar.matches(List(ink.inputs.size) { i ->
-                            val p = ink.inputs[i]; SingleStrokeStar.Point(p.x, p.y)
-                        })) StrokeIndex.Bounds(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax) else null
+    LaunchedEffect(note.id, note.paper, renderContent) {
+        if (!renderContent) return@LaunchedEffect
+        // Hydration publishes frequently. Finish each snapshot instead of restarting a debounce
+        // (and the first preview) until the entire note has arrived.
+        snapshotFlow { ui.contentRevision to ui.busy }.conflate().collect {
+            if (ui.busy) return@collect
+            val entries = model.edits.snapshot()
+            val strokes = entries.map { it.value }
+            val bottom = maxOf(1000f, model.contentBottom + 24f)
+            fun snapshot(): PreviewDocument {
+                val stars = strokes.mapNotNull { starCache[it.storageId] }
+                val starIds = strokes.filter { starCache[it.storageId] != null }.mapTo(mutableSetOf()) { it.storageId }
+                return PreviewDocument(bottom, StarPreviewRows.group(stars)) { bounds ->
+                    NoteExport.preview(strokes, note.paper, bounds, enlargedStrokes = starIds)
                 }
-                starCache[stroke.storageId]
             }
-            val starIds = entries.filter { starCache[it.value.storageId] != null }.mapTo(mutableSetOf()) { it.value.storageId }
-            PreviewDocument(bottom, StarPreviewRows.group(stars)) { bounds ->
-                NoteExport.preview(entries.map { it.value }, note.paper, bounds, enlargedStrokes = starIds)
+            // Ink is usable before recognition and before the unread regions finish loading.
+            document = snapshot()
+            val foundStars = withContext(Dispatchers.Default) {
+                starCache.keys.retainAll(entries.map { it.value.storageId }.toSet())
+                var found = false
+                entries.forEach { entry ->
+                    currentCoroutineContext().ensureActive()
+                    val stroke = entry.value
+                    if (!starCache.containsKey(stroke.storageId)) {
+                        val ink = stroke.inkOrNull
+                        val bounds = stroke.bounds
+                        starCache[stroke.storageId] = if (ink != null && bounds != null &&
+                            SingleStrokeStar.matches(List(ink.inputs.size) { i ->
+                                val p = ink.inputs[i]; SingleStrokeStar.Point(p.x, p.y)
+                            })) StrokeIndex.Bounds(bounds.xMin, bounds.yMin, bounds.xMax, bounds.yMax) else null
+                        if (starCache[stroke.storageId] != null) found = true
+                    }
+                }
+                found
             }
+            if (foundStars) document = snapshot()
+            delay(300)
         }
     }
     key(note.id) {
-        NotePreview(document, visibleRegion, ui.busy || workspace.working, modifier, onRight, renderContent,
-            onMove = model::moveViewportFromPreview, onMoveEnd = model::viewportChanged)
+        Box(modifier) {
+            NotePreview(document, visibleRegion, ui.busy || workspace.working, Modifier.fillMaxSize(), onRight, renderContent,
+                onMove = model::moveViewportFromPreview, onMoveEnd = model::viewportChanged)
+            if (renderContent && ui.loadingRest) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+        }
     }
 }
 
@@ -243,14 +260,17 @@ private fun PreviewBand(document: PreviewDocument, top: Float, bottom: Float, vi
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     var failed by remember { mutableStateOf(false) }
     var retry by remember { mutableIntStateOf(0) }
-    LaunchedEffect(document, top, bottom, retry) {
-        failed = false
-        try {
-            bitmap = withContext(Dispatchers.Default) {
-                document.render(RectF(0f, top, Viewport.WIDTH, bottom))
-            }
-        } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { failed = true }
+    val currentDocument by rememberUpdatedState(document)
+    LaunchedEffect(top, bottom, retry) {
+        snapshotFlow { currentDocument }.conflate().collect { snapshot ->
+            failed = false
+            try {
+                bitmap = withContext(Dispatchers.Default) {
+                    snapshot.render(RectF(0f, top, Viewport.WIDTH, bottom))
+                }
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { failed = true }
+        }
     }
     Surface(Modifier.fillMaxWidth().aspectRatio(Viewport.WIDTH / (bottom - top))) {
         Box(Modifier.drawWithContent {
