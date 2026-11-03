@@ -22,13 +22,21 @@ internal class NotebookStorage(private val context: Context, private val directo
     private val switching = File(directory, ".notes-external-switch")
     private var working: ExternalWorkingSet? = null
     private var archive: NotebookArchive? = null
+    private var regions: SpatialNoteCache? = null
+    private val publishedBodies = mutableMapOf<String, Pair<String, NoteFileStamp>>()
+    internal var lastSnapshotNoteBytes = 0L
+        private set
     private var needsLegacyRestore = false
-    private var active: String? = null
+    @Volatile private var active: String? = null
     private var version = 0L
     private var connection: Job? = null
     private val externalMode = MutableStateFlow(false)
     private val connectionState = MutableStateFlow(SaveState())
-    private val queue = SaveQueue(scope, batchMillis = 750L) { _: Unit -> withContext(Dispatchers.IO) { saveExternal() } }
+    var beforeExternalSave: suspend () -> Unit = {}
+    private val queue = SaveQueue(scope, batchMillis = 750L) { _: Unit ->
+        beforeExternalSave()
+        withContext(Dispatchers.IO) { saveExternal() }
+    }
     val syncState = combine(legacy.syncState, queue.state, connectionState, externalMode) { old, save, connect, external ->
         if (!external) old else save.copy(saving = save.saving || connect.saving,
             error = connect.error ?: save.error)
@@ -86,11 +94,12 @@ internal class NotebookStorage(private val context: Context, private val directo
             throw error
         }
     }
-    private fun newWorkingSet(tree: Uri) = ExternalWorkingSet(directory, tree.toString()) { hash, target ->
+    private fun regionStore(tree: Uri) = SpatialNoteCache(PackedDocumentFiles(context.contentResolver, tree, "inkdata/.regions"))
+    private fun newWorkingSet(tree: Uri) = ExternalWorkingSet(directory, tree.toString(), spatialReader = { hash -> regionStore(tree).open(hash) }) { hash, target ->
         // Each reader owns its provider inventory; uploads and lazy downloads never share it.
-        val source = MisqArchiveDirectory(MisqDocumentFiles(context.contentResolver, tree))
+        val source = MisqDocumentFiles(context.contentResolver, tree)
         source.names()
-        source.copyTo("blob-$hash", target)
+        source.openRead("blob-$hash").use { input -> target.outputStream().use { input.copyTo(it, 65536) } }
     }
     private fun openArchive(tree: Uri = checkNotNull(uri)) =
         NotebookArchive(MisqArchiveDirectory(MisqDocumentFiles(context.contentResolver, tree)))
@@ -145,11 +154,48 @@ internal class NotebookStorage(private val context: Context, private val directo
         }
         return files
     }
-    private fun snapshot() = ArchiveSnapshot.capture(localFiles().filterKeys { working?.isDeleted(it) != true }, working?.references().orEmpty())
+    private fun snapshot(): ArchiveSnapshot {
+        working?.takeIf { it.available }?.let { set -> recoverPartial(set) }
+        val local = localFiles().filterKeys { working?.isDeleted(it) != true }
+        val references = working?.references().orEmpty().toMutableMap()
+        val copy = local.filter { (path, file) ->
+            val published = publishedBodies[path]
+            val unchanged = path.endsWith(".misq") && published != null && references[path]?.hash == published.first &&
+                published.second.identity != null && runCatching { file.noteStamp() == published.second }.getOrDefault(false) &&
+                BlockChanges.capture(file)?.let { it.baseline == published.first && it.dirty.isEmpty() && it.metadataDirty == 0L } == true
+            if (unchanged) {
+                val expected = checkNotNull(published)
+                // If a remote object disappeared, recreate it from a checked, immutable copy
+                // of the still-unchanged local body rather than depending on a missing blob.
+                references[path] = ArchiveBlob(expected.first, directory) { target -> synchronized(this) {
+                    check(file.noteStamp() == expected.second) { "Notebook changed during snapshot repair" }
+                    file.copyTo(target, overwrite = true)
+                } }
+            }
+            !unchanged
+        }
+        return ArchiveSnapshot.capture(copy, references)
+    }
+    private fun acknowledgeBlocks(snapshot: ArchiveSnapshot, published: Set<String>) {
+        val baseline = working?.baseline.orEmpty()
+        publishedBodies.entries.removeAll { (path, value) -> baseline[path] != value.first }
+        snapshot.sources.filterKeys { it.endsWith(".misq") }.forEach { (path, source) ->
+            val blob = snapshot[path] ?: return@forEach
+            if (path in published && baseline[path] == blob.hash) blob.changes?.let { captured -> runCatching { BlockChanges.acknowledge(source.first, captured, blob.hash) } }
+            if (path in published && baseline[path] == blob.hash && source.second.identity != null &&
+                runCatching { source.first.noteStamp() == source.second }.getOrDefault(false))
+                publishedBodies[path] = blob.hash to source.second
+        }
+    }
+    private fun recoverPartial(set: ExternalWorkingSet) = PartialNoteJournal.recover(File(directory, "notes"), NoteFiles(File(directory, "notes")),
+        deleted = { set.isDeleted("notes/$it.misq") }) { set.ensure(it) }
 
     /** Runs before constructing the editor, so a merged body can never replace live edits. */
     private fun connectExternal() {
         val set = checkNotNull(working)
+        set.available = true
+        try { recoverPartial(set) }
+        finally { set.available = false }
         set.archiveLegacyOriginals()
         val reader = openArchive()
         snapshot().use { local ->
@@ -159,6 +205,7 @@ internal class NotebookStorage(private val context: Context, private val directo
             try {
                 val selected = MisqMerge.mergeFiles(set.baseBlobs(), local, remoteBlobs, work)
                 if (selected.mapValues { it.value.hash } != remote.files) reader.commitSnapshot(selected)
+                val published = publishRegions(selected)
                 // Keep interrupted imports recoverable: publish the new baseline only after all
                 // changed working files and metadata have been installed successfully.
                 applySelected(selected, local)
@@ -166,6 +213,7 @@ internal class NotebookStorage(private val context: Context, private val directo
                 set.archiveLegacyOriginals()
                 set.available = true
                 set.rebuildCatalog()
+                acknowledgeBlocks(local, published)
                 archive = reader; recovered = reader.recovered; blockedByRemoteChange = false
                 pending.delete()
                 set.evict()
@@ -205,11 +253,13 @@ internal class NotebookStorage(private val context: Context, private val directo
         val captured: ArchiveSnapshot
         val capturedVersion: Long
         synchronized(this) {
+            if (!pending.exists()) return
             set = checkNotNull(working)
             check(set.available) { AppMessages.text(R.string.storage_unavailable) }
             check(!blockedByRemoteChange) { AppMessages.text(R.string.storage_incoming) }
             target = checkNotNull(archive)
             captured = snapshot()
+            lastSnapshotNoteBytes = captured.sources.filterKeys { it.endsWith(".misq") }.values.sumOf { it.second.size }
             capturedVersion = version
         }
         captured.use {
@@ -218,14 +268,25 @@ internal class NotebookStorage(private val context: Context, private val directo
                 synchronized(this) { blockedByRemoteChange = true }
                 throw java.io.IOException(AppMessages.text(R.string.storage_incoming), error)
             }
+            val published = publishRegions(captured)
             synchronized(this) {
                 set.accept(captured.mapValues { it.value.hash })
                 set.archiveLegacyOriginals()
-                set.rebuildCatalog()
+                set.rebuildCatalog(captured)
+                acknowledgeBlocks(captured, published)
                 // Local writes may have happened during provider IO. Acknowledge only this snapshot.
                 if (version == capturedVersion) pending.delete()
             }
         }
+    }
+    private fun publishRegions(snapshot: Map<String, ArchiveBlob>): Set<String> {
+        val store = regions ?: regionStore(checkNotNull(uri)).also { regions = it }
+        val published = mutableSetOf<String>()
+        snapshot.filterKeys { it.endsWith(".misq") }.forEach { (path, blob) -> blob.localFile?.let { file ->
+            runCatching { store.publish(file, blob.hash, blob.changes) }.onSuccess { published += path }
+                .onFailure { android.util.Log.w("MisqStorage", "Spatial cache could not be published", it) }
+        } }
+        return published
     }
     @Synchronized fun <T> write(block: () -> T): T {
         val set = working ?: return legacy.write(block)
@@ -243,11 +304,12 @@ internal class NotebookStorage(private val context: Context, private val directo
             override fun summaries() = synchronized(this@NotebookStorage) { working?.summaries().orEmpty() }
             override fun deleted(id: String) = synchronized(this@NotebookStorage) { working?.deleted(id); Unit }
             override fun preview(id: String) = synchronized(this@NotebookStorage) { checkNotNull(working).preview(id) }
+            override fun spatial(id: String) = synchronized(this@NotebookStorage) { working?.spatial(id) }
         }
     }
     @Synchronized fun contains(id: String) = working?.contains(id) == true || File(directory, "notes/$id.misq").exists()
     @Synchronized fun ensure(id: String) { working?.ensure(id) }
-    @Synchronized fun keepOpen(id: String?) { active = id }
+    fun keepOpen(id: String?) { active = id }
     /** The repository serializes this with reads/previews; provider writes own immutable snapshots. */
     @Synchronized fun releaseWorkingCopies() { working?.evict(active) }
     @Synchronized fun startBackground() {
@@ -258,7 +320,7 @@ internal class NotebookStorage(private val context: Context, private val directo
     suspend fun awaitSync(): Boolean {
         if (working == null) return legacy.awaitSync()
         connection?.join()
-        return connectionState.value.error == null && queue.await(queue.state.value.latest) && !pending.exists()
+        return connectionState.value.error == null && queue.flush() && !pending.exists()
     }
     @Synchronized fun retryPending() {
         if (working == null) { legacy.retryPending(); return }
@@ -274,7 +336,7 @@ internal class NotebookStorage(private val context: Context, private val directo
             queue.await(queue.state.value.latest)
             if (tree != null) check(awaitSync()) { AppMessages.text(R.string.wait_note) }
             // A deliberate switch to internal storage must first acquire every remaining body.
-            synchronized(this) { set.materializeAll() }
+            synchronized(this) { recoverPartial(set); set.materializeAll() }
         }
         if (set != null) {
             val json = JSONObject().put("from", uri.toString()).put("to", tree?.toString().orEmpty())
@@ -284,7 +346,7 @@ internal class NotebookStorage(private val context: Context, private val directo
         try { legacy.change(tree) }
         catch (error: Exception) { clearSwitch(); throw error }
         synchronized(this) {
-            set?.forget(); working = null; archive = null; externalMode.value = false
+            set?.forget(); working = null; archive = null; regions = null; publishedBodies.clear(); externalMode.value = false
             blockedByRemoteChange = false; connectionState.value = SaveState()
             clearSwitch()
         }

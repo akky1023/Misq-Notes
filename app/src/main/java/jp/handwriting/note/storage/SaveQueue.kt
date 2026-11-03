@@ -11,7 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class SaveState(val latest: Long = 0, val saved: Long = 0, val failed: Long = 0, val saving: Boolean = false, val error: String? = null)
 
@@ -21,6 +21,7 @@ class SaveQueue<T>(scope: CoroutineScope, private val batchMillis: Long = 0, pri
     private data class Request<T>(val generation: Long, val value: T)
     private val queue = Channel<Request<T>>(Channel.CONFLATED)
     private val mutableState = MutableStateFlow(SaveState())
+    private val immediateThrough = MutableStateFlow(0L)
     private var lastValue: T? = null
     val state = mutableState.asStateFlow()
     init {
@@ -30,7 +31,7 @@ class SaveQueue<T>(scope: CoroutineScope, private val batchMillis: Long = 0, pri
                 // snapshots are replaced; a write already in progress always finishes.
                 var request = first
                 if (batchMillis > 0) {
-                    delay(batchMillis)
+                    withTimeoutOrNull(batchMillis) { immediateThrough.first { it >= request.generation } }
                     while (true) request = queue.tryReceive().getOrNull() ?: break
                 }
                 try {
@@ -52,6 +53,11 @@ class SaveQueue<T>(scope: CoroutineScope, private val batchMillis: Long = 0, pri
         return generation
     }
     @Synchronized fun retry() { lastValue?.let(::request) }
+    /** Explicit navigation/save waits bypass batching, without cancelling an in-flight write. */
+    suspend fun flush(generation: Long = state.value.latest): Boolean {
+        immediateThrough.update { maxOf(it, generation) }
+        return await(generation)
+    }
     suspend fun await(generation: Long): Boolean = state.first {
         it.saved >= generation || (it.failed >= generation && !it.saving)
     }.saved >= generation

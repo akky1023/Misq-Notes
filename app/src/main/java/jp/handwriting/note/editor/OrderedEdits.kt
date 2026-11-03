@@ -60,6 +60,15 @@ class OrderedEdits<T : Any>(private val historyLimit: Int = 256) {
         revision++
         onChange()
     }
+    /** Materialize existing IDs without recording an edit or disturbing undo/redo/new IDs. */
+    internal fun hydrate(entries: List<Entry<T>>) {
+        check(!busy)
+        require(entries.all { it.id > 0 && it.id < nextId && content.value(it.id) == null })
+        require(entries.map { it.id }.distinct().size == entries.size)
+        if (entries.isEmpty()) return
+        apply(emptyList(), entries)
+        onChange()
+    }
 
     fun reserveStroke(): Long = nextId++.also { pending[it] = Add(); onChange() }
     fun resolveStroke(id: Long, value: T) {

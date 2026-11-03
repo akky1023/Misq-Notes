@@ -11,6 +11,7 @@ import org.json.JSONObject
 
 /** Only hashes, deletion intents and rebuildable list metadata survive a successful external save. */
 internal class ExternalWorkingSet(private val directory: File, val tree: String,
+    private val spatialReader: ((String) -> SpatialNoteCache.Source?)? = null,
     private val fetch: (String, File) -> Unit) : NoteBacking {
     private val state = File(directory, ".notes-external-state")
     private val catalog = File(directory, ".notes-external-catalog")
@@ -64,6 +65,10 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         NoteFiles.atomicWrite(catalog, json.toString().toByteArray())
     }
     override fun contains(id: String) = path(id) in baseline && id !in deleted
+    override fun spatial(id: String): SpatialNoteCache.Source? {
+        if (!available || !contains(id)) return null
+        return spatialReader?.invoke(baseline.getValue(path(id)))?.also { require(it.manifest.info.id == id) }
+    }
     fun isDeleted(path: String) = noteId(path)?.let { it in deleted } == true
     override fun ensure(id: String) {
         val target = File(root, "${validId(id)}.misq")
@@ -113,14 +118,17 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         baseline = files.toMap()
         save()
     }
-    fun rebuildCatalog() {
+    fun rebuildCatalog(captured: Map<String, ArchiveBlob> = emptyMap()) {
         baseline.forEach { (path, hash) ->
             val id = noteId(path) ?: return@forEach
             if (id in deleted || cached[id]?.first == hash) return@forEach
             val local = File(root, "$id.misq")
             val temporary = File(directory, ".notes-catalog-${UUID.randomUUID()}.misq")
             try {
-                val source = if (local.exists() && NotebookArchive.digest(local) == hash) local else temporary.also {
+                // The immutable upload snapshot is already hashed. Live edits may have advanced
+                // since capture; do not download the just-uploaded older body in that case.
+                val source = captured[path]?.takeIf { it.hash == hash }?.localFile
+                    ?: if (local.exists() && NotebookArchive.digest(local) == hash) local else temporary.also {
                     fetch(hash, it); check(NotebookArchive.digest(it) == hash)
                 }
                 val document = MisqFile(source, readOnlyAlias = true)
@@ -150,7 +158,7 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         baseline.forEach { (path, hash) ->
             val id = noteId(path) ?: return@forEach
             val file = File(root, "$id.misq")
-            if (id != active && id !in deleted && cached[id]?.first == hash && file.isFile && NotebookArchive.digest(file) == hash)
+            if (id != active && id !in deleted && !PartialNoteJournal.exists(root, id) && cached[id]?.first == hash && file.isFile && NotebookArchive.digest(file) == hash)
                 check(file.delete()) { "Unable to release saved notebook working copy" }
         }
     }

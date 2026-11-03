@@ -9,6 +9,21 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 
 class MisqArchiveTest {
+    @Test fun materializedRemoteSourceCanBeReleasedBeforeViewPublication() {
+        val (_, sources) = fixture(); val memory = Memory()
+        val archive = NotebookArchive(MisqArchiveDirectory(memory))
+        archive.commit(sources)
+        val note = sources.entries.single { it.key.endsWith(".misq") }
+        val bytes = note.value.readBytes(); val hash = NotebookArchive.digest(bytes)
+        memory.files.remove("blob-$hash")
+        memory.files.remove(note.value.name)
+        val blobs = sources.mapValues { (path, file) ->
+            if (path == note.key) ArchiveBlob(hash, temp.root) { it.writeBytes(bytes) } else ArchiveBlob(file)
+        }
+        archive.commitSnapshot(blobs)
+        assertArrayEquals(bytes, memory.files[note.value.name])
+        assertTrue(temp.root.listFiles()!!.none { it.name.startsWith(".notes-fetch-") })
+    }
     @Test fun cleanupPreservesOtherToolsCopiesButRemovesExplicitlyDeletedOwnedNotes() {
         val (_, sources) = fixture()
         val memory = Memory()

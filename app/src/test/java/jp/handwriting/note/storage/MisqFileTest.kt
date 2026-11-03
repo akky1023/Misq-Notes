@@ -11,6 +11,34 @@ import org.junit.rules.TemporaryFolder
 
 class MisqFileTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun batchReadPreservesOrderAndRejectsCorruptPayload() {
+        val (files, empty) = note(); val a = ref(1); val b = ref(2)
+        files.save(empty.copy(strokes = listOf(a, b), nextId = 3)) {
+            if (it == a.storageId) byteArrayOf(1) else byteArrayOf(2)
+        }
+        val document = files.document(empty.info.id)
+        assertEquals(listOf(b.id to 2, a.id to 1), document.readStrokes(listOf(b, a)) { ref, bytes -> ref.id to bytes.single().toInt() })
+        RandomAccessFile(document.file, "rw").use { output ->
+            output.seek(document.index().records.getValue(b.storageId).offset); output.write(3)
+        }
+        assertThrows(IOException::class.java) { document.readStrokes(listOf(a, b)) { _, bytes -> bytes } }
+    }
+    @Test fun damagedLatestIndexFallsBackAndPreviousGenerationRemainsAvailable() {
+        val (files, empty) = note(); files.rename(empty.info.id, "latest")
+        val document = files.document(empty.info.id)
+        val latest = MisqFile(document.file)
+        assertEquals("latest", latest.readManifest().manifest.info.title)
+        assertEquals(empty, latest.previous())
+        assertEquals(2, latest.indexes().size)
+        val generation = latest.index().generation
+        RandomAccessFile(document.file, "rw").use { output ->
+            output.seek(8L + generation % 2 * 192 + 8)
+            val offset = output.readLong(); output.seek(offset); output.write(0)
+        }
+        val recovered = MisqFile(document.file).readManifest()
+        assertTrue(recovered.recovered)
+        assertEquals(empty, recovered.manifest)
+    }
     @Test fun clockSkewFixturePreservesSharedAncestorsAndCanBeResolved() {
         val (files, empty) = note()
         val old = ref(1)

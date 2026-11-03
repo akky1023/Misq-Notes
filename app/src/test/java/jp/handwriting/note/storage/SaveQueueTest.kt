@@ -6,6 +6,45 @@ import org.junit.Test
 import java.io.IOException
 
 class SaveQueueTest {
+    @Test fun flushBypassesAnAlreadyStartedBatchAndFutureRequestsStillBatch() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            val writes = mutableListOf<Int>()
+            val queue = SaveQueue<Int>(scope, batchMillis = 60000) { writes += it }
+            val first = queue.request(1)
+            yield()
+            val latest = queue.request(2)
+            assertTrue(withTimeout(5000) { queue.flush(latest) })
+            assertTrue(queue.await(first))
+            assertEquals(listOf(2), writes)
+            val next = queue.request(3)
+            yield()
+            assertEquals(listOf(2), writes) // An old flush cannot expedite a later request.
+            assertTrue(withTimeout(5000) { queue.flush(next) })
+            assertEquals(listOf(2, 3), writes)
+        } finally { scope.cancel() }
+    }
+    @Test fun flushKeepsInFlightWritesAndReportsFailure() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            val started = CompletableDeferred<Unit>(); val finish = CompletableDeferred<Unit>()
+            val writes = mutableListOf<Int>()
+            val queue = SaveQueue<Int>(scope, batchMillis = 60000) {
+                if (it == 1) { started.complete(Unit); finish.await() }
+                if (it == 3) throw IOException("full")
+                writes += it
+            }
+            val first = queue.request(1)
+            val waiting = async { queue.flush(first) }
+            withTimeout(5000) { started.await() }
+            val second = queue.request(2)
+            val last = async { queue.flush(second) }
+            finish.complete(Unit)
+            assertTrue(withTimeout(5000) { waiting.await() && last.await() })
+            assertEquals(listOf(1, 2), writes)
+            assertFalse(withTimeout(5000) { queue.flush(queue.request(3)) })
+        } finally { scope.cancel() }
+    }
     @Test fun batchesRapidRequestsAndAwaitWaitsForTheLatestSnapshot() = runBlocking {
         val scope = CoroutineScope(coroutineContext + SupervisorJob())
         try {

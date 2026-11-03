@@ -16,15 +16,16 @@ internal fun File.noteStamp(): NoteFileStamp = Files.readAttributes(toPath(), ja
 
 /** Append-only payloads and two checksummed commit slots. A preview never decodes stroke data. */
 internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = false) {
-    private var cachedStamp: Pair<Long, Long>? = null
+    private var cachedStamp: NoteFileStamp? = null
     private var cachedIndexes: List<Index>? = null
+    private var cachedAllIndexes = false
     internal data class Record(val offset: Long, val size: Int, val hash: String)
     private data class Slot(val generation: Long, val index: Record, val thumbnail: Record?, val summary: Record?)
     internal data class Event(val version: String, val entity: String, val parents: List<String>,
         val blob: String?, val order: Long, val at: Long)
     internal data class Index(val generation: Long, val manifest: NoteManifest, val records: Map<String, Record>,
         val events: List<Event>, val entities: Map<Long, String>, val thumbnail: Record? = null, val thumbnailKey: String? = null,
-        val previousManifest: NoteManifest? = null)
+        val previousManifest: NoteManifest? = null, val placements: Map<String, StrokePlacement> = emptyMap())
     private val codec get() = NoteFiles(file.parentFile!!, false)
     private fun key(note: NoteManifest) = NotebookArchive.digest((note.info.paper.color.toString() + ":" +
         note.strokes.joinToString { it.storageId }).toByteArray())
@@ -52,22 +53,24 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             Slot(generation, index, if (magic == MAGIC) ref() else null, if (magic == MAGIC) ref() else null)
         }.getOrNull() }.sortedByDescending { it.generation }
     }
-    internal fun indexes(): List<Index> {
-        val stamp = file.length() to file.lastModified()
-        if (cachedStamp == stamp) cachedIndexes?.let { return it }
+    internal fun indexes(): List<Index> = readIndexes(all = true)
+    private fun readIndexes(all: Boolean): List<Index> {
+        val stamp = file.noteStamp()
+        if (cachedStamp == stamp && (!all || cachedAllIndexes)) cachedIndexes?.let { return it }
         try {
             return RandomAccessFile(file, "r").use { input ->
                 require(input.length() >= LEGACY_HEADER)
-                slots(input).mapNotNull { slot -> runCatching {
+                val parsed = slots(input).asSequence().mapNotNull { slot -> runCatching {
                     val body = record(input, slot.index)
                     val parsed = decode(JSONObject(String(body, Charsets.UTF_8)))
                     require(parsed.generation == slot.generation)
                     parsed
-                }.getOrNull() }.sortedByDescending { it.generation }.also { require(it.isNotEmpty()) }
-            }.also { cachedStamp = stamp; cachedIndexes = it }
+                }.getOrNull() }
+                (if (all) parsed else parsed.take(1)).toList().also { require(it.isNotEmpty()) }
+            }.also { cachedStamp = stamp; cachedIndexes = it; cachedAllIndexes = all }
         } catch (error: Exception) { throw IOException("Invalid Misq note: ${file.name}", error) }
     }
-    internal fun index() = indexes().first()
+    internal fun index() = readIndexes(all = false).first()
     /** Stable note content identity, excluding display preferences and disposable previews. */
     internal fun contentKey(): String {
         val index = index()
@@ -93,6 +96,15 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         val index = index()
         RandomAccessFile(file, "r").use { record(it, index.records.getValue(id)) }
     } catch (error: Exception) { throw IOException("Invalid Misq stroke: $id", error) }
+    /** Keep one descriptor/index for a full load; each payload is still checked before decoding. */
+    fun <T> readStrokes(refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> {
+        val index = index()
+        return RandomAccessFile(file, "r").use { input -> refs.map { ref ->
+            val bytes = try { record(input, index.records.getValue(ref.storageId)) }
+                catch (error: Exception) { throw IOException("Invalid Misq stroke: ${ref.storageId}", error) }
+            decode(ref, bytes)
+        } }
+    }
     fun thumbnailCurrent() = index().let { it.thumbnail != null && it.thumbnailKey == key(it.manifest) }
     fun thumbnail(): ByteArray? = RandomAccessFile(file, "r").use { input ->
         val committed = slots(input)
@@ -123,6 +135,8 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         }
         throw IOException("Invalid Misq summary")
     }
+    internal fun externalIdentity(): Pair<String, String> = summary().id to
+        RandomAccessFile(file, "r").use { slots(it).first().index.hash }
     private fun append(output: RandomAccessFile, bytes: ByteArray): Record {
         require(bytes.size <= MAX_RECORD)
         val offset = output.length().coerceAtLeast(HEADER.toLong())
@@ -145,14 +159,16 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         put(ref); put(index.thumbnail); put(summaryRef)
         val slotBody = slotData.array() + MessageDigest.getInstance("SHA-256").digest(slotData.array())
         output.seek(8L + slot * SLOT); output.write(slotBody); output.fd.sync()
-        cachedStamp = null; cachedIndexes = null
+        // Keep the index we just durably committed; the next pen lift/preview need not
+        // parse megabytes of our own JSON again. Detect replacement and fine-grained edits.
+        cachedStamp = file.noteStamp(); cachedIndexes = listOf(index); cachedAllIndexes = false
     }
     private fun open(): RandomAccessFile {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         file.parentFile!!.mkdirs()
         return RandomAccessFile(file, "rw").also { if (it.length() == 0L) { it.setLength(HEADER.toLong()); it.writeLong(MAGIC); it.fd.sync() } }
     }
-    fun save(note: NoteManifest, encode: (String) -> ByteArray) {
+    fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         upgradeLegacy()
         if (file.exists() && file.length() > 0) {
@@ -167,7 +183,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             val committed = RandomAccessFile(file, "r").use { input -> (0..1).any { input.seek(8L + it * SLOT); input.readLong() != 0L } }
             if (committed) throw it else null
         } else null
-        if (previous?.manifest == note) return
+        if (previous?.manifest == note && placements.all { previous.placements[it.key] == it.value }) return
         val events = previous?.events.orEmpty().toMutableList()
         val histories = events.groupBy { it.entity }
         var lastOrder = events.maxOfOrNull { it.order } ?: 0L
@@ -187,7 +203,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             val records = previous?.records.orEmpty().toMutableMap()
             note.strokes.forEach { ref -> if (ref.storageId !in records) records[ref.storageId] = append(output, encode(ref.storageId)) }
             commit(output, Index((previous?.generation ?: 0) + 1, note, records, events, entities,
-                previous?.thumbnail, previous?.thumbnailKey, previous?.manifest))
+                previous?.thumbnail, previous?.thumbnailKey, previous?.manifest, previous?.placements.orEmpty() + placements))
         }
     }
     /** Resolve every imported head, including rejected additions, so later sync cannot resurrect them. */
@@ -305,6 +321,9 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         .put("thumbnail", index.thumbnail?.let(::recordJson) ?: JSONObject.NULL)
         .put("thumbnailKey", index.thumbnailKey ?: JSONObject.NULL)
         .put("previousManifest", index.previousManifest?.let { Base64.getEncoder().encodeToString(codec.encodeManifest(it)) } ?: JSONObject.NULL)
+        .put("placements", JSONObject().also { values -> index.placements.forEach { (id, p) ->
+            values.put(id, JSONArray().put(p.startY).put(p.top).put(p.bottom))
+        } })
     private fun recordJson(ref: Record) = JSONObject().put("offset", ref.offset).put("size", ref.size).put("sha256", ref.hash)
     private fun recordJson(obj: JSONObject) = Record(obj.getLong("offset"), obj.getInt("size"), obj.getString("sha256")).also {
         require(it.offset >= LEGACY_HEADER && it.size in 0..MAX_RECORD && it.hash.matches(Regex("[a-f0-9]{64}")))
@@ -332,7 +351,11 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         return Index(obj.getLong("generation"), note, records, events, entities,
             if (obj.isNull("thumbnail")) null else recordJson(obj.getJSONObject("thumbnail")),
             if (obj.isNull("thumbnailKey")) null else obj.getString("thumbnailKey"),
-            if (obj.isNull("previousManifest")) null else codec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))))
+            if (obj.isNull("previousManifest")) null else codec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))),
+            obj.optJSONObject("placements")?.let { values -> values.keys().asSequence().associate { id ->
+                val value = values.getJSONArray(id)
+                uuid(id) to StrokePlacement(value.getDouble(0).toFloat(), value.getDouble(1).toFloat(), value.getDouble(2).toFloat())
+            } }.orEmpty())
     }
     companion object {
         private const val LEGACY_MAGIC = 0x4D49535130303031L

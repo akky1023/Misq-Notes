@@ -318,11 +318,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         }
         label.setOnClickListener {
             popup.dismiss()
-            if (model.beginSpaceInsertion(y)) {
+            model.prepareSpaceInsertion(y) { prepared -> if (prepared) {
                 spaceInsertionY = y
                 Toast.makeText(context, AppMessages.text(R.string.insert_space_drag), Toast.LENGTH_LONG).show()
                 invalidate()
-            } else Toast.makeText(context, AppMessages.text(R.string.insert_space_empty), Toast.LENGTH_SHORT).show()
+            } else Toast.makeText(context, AppMessages.text(R.string.insert_space_empty), Toast.LENGTH_SHORT).show() }
         }
         popup.setOnDismissListener { if (canvasMenu === popup) canvasMenu = null }
         canvasMenu = popup

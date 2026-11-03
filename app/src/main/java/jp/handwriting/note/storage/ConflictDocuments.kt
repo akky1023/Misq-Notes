@@ -31,6 +31,11 @@ internal class ConflictDocuments(private val resolver: ContentResolver, private 
             return buffer.array()
         }
         val magic = String(read(0, 8), Charsets.US_ASCII)
+        if (magic == "MISQBLK1") {
+            input.channel.position(0)
+            val manifest = checkNotNull(BlockPackedFiles.inspect(input))
+            return Identity(checkNotNull(manifest.noteId), checkNotNull(manifest.revision))
+        }
         require(magic == "MISQ0002" || magic == "MISQ0001")
         val size = if (magic == "MISQ0002") 192 else 64
         return (0..1).mapNotNull { slot -> runCatching {
@@ -59,10 +64,12 @@ internal class ConflictDocuments(private val resolver: ContentResolver, private 
         val folder = documents.firstOrNull { it.directory && it.name == "inkdata" }?.uri ?: root
         check(cache.isDirectory || cache.mkdirs())
         val entries = children(folder).filter { !it.directory && it.name.endsWith(".misq", true) }
+        val expanded by lazy { MisqDocumentFiles(resolver, tree).also { it.names() } }
         val retained = entries.map { NotebookArchive.digest(it.uri.toString().toByteArray()) + ".misq" }.toSet()
         cache.listFiles().orEmpty().filter { it.name.matches(Regex("[a-f0-9]{64}\\.misq")) && it.name !in retained }.forEach { it.delete() }
         return entries.mapNotNull { document ->
             runCatching {
+                val blockIndex = runCatching { resolver.openInputStream(document.uri)!!.use(BlockPackedFiles::inspect) }.getOrNull()
                 val header = runCatching { resolver.openFileDescriptor(document.uri, "r")!!.use { descriptor ->
                     android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor).use(::identity)
                 } }.getOrNull()
@@ -73,7 +80,8 @@ internal class ConflictDocuments(private val resolver: ContentResolver, private 
                 if (header == null || cached != header) {
                     val temporary = File(cache, "$key.tmp")
                     try {
-                        resolver.openInputStream(document.uri)!!.use { input -> temporary.outputStream().use { input.copyTo(it, 65536) } }
+                        (if (blockIndex != null) expanded.openRead(document.name) else resolver.openInputStream(document.uri)!!)
+                            .use { input -> temporary.outputStream().use { input.copyTo(it, 65536) } }
                         val actual = FileInputStream(temporary).use(::identity)
                         check(header == null || header == actual)
                         if (document.name == "${actual.id}.misq") return@runCatching null

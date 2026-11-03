@@ -45,6 +45,7 @@ class ExternalStorageIntegrationTest {
             test(directory, tree, scope, storage, manifests)
         } finally {
             scope.cancel(); failWrites(false)
+            callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", false) })
             DocumentsContract.deleteDocument(context.contentResolver,
                 DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)))
             runCatching { context.contentResolver.releasePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
@@ -53,6 +54,285 @@ class ExternalStorageIntegrationTest {
         }
     }
     private fun bodies(directory: File) = File(directory, "notes").listFiles().orEmpty().filter { it.extension == "misq" }
+    @Test fun dirtyBandsSurviveFailureAndUnchangedBodyIsNotCopiedForSettingsSave() = runBlocking {
+        fixture { directory, tree, _, storage, manifests ->
+            val note = manifests.first(); val id = note.info.id; val files = storage.noteFiles()
+            files.read(id); storage.keepOpen(id)
+            val a = StrokeRef(1, UUID.randomUUID().toString()); val b = StrokeRef(2, UUID.randomUUID().toString())
+            val manifest = note.copy(strokes = listOf(a, b), nextId = 3)
+            failWrites(true)
+            storage.write { files.save(manifest, mapOf(a.storageId to StrokePlacement(0f, 0f, 10f), b.storageId to StrokePlacement(5000f, 5000f, 5010f))) {
+                if (it == b.storageId) ByteArray(8 * 1024 * 1024) { n -> (n % 251).toByte() } else byteArrayOf(1)
+            } }
+            assertFalse(withTimeout(30000) { storage.awaitSync() })
+            val body = files.document(id).file
+            assertEquals(setOf(0L, 5L), BlockChanges.capture(body)!!.dirty.keys)
+            failWrites(false); storage.retryPending()
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            val saved = BlockChanges.capture(body)!!
+            assertTrue(saved.dirty.isEmpty()); assertEquals(0L, saved.metadataDirty)
+            assertEquals(NotebookArchive.digest(body), saved.baseline)
+            val library = LibraryPreferencesFile(File(directory, "library.hwp"))
+            storage.write { library.write(library.read().added("metadata only", null)) }
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            assertEquals(0L, storage.lastSnapshotNoteBytes)
+            assertEquals(saved.generation, BlockChanges.capture(body)!!.generation)
+            // Reusing a remote reference must still repair a missing remote object from the
+            // verified local body, without losing the note or clearing later changes.
+            val recovery = PackedDocumentFiles(context.contentResolver, tree, "inkdata/.recovery")
+            recovery.names(); recovery.delete("blob-${saved.baseline}")
+            storage.write { library.write(library.read().added("repair reference", null)) }
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            val physical = MisqDocumentFiles(context.contentResolver, tree); physical.names()
+            assertTrue(physical.matchesNote("blob-${saved.baseline}", saved.baseline!!))
+            val moved = a.copy(storageId = UUID.randomUUID().toString())
+            storage.write { files.save(manifest.copy(strokes = listOf(moved, b)), mapOf(moved.storageId to StrokePlacement(2000f, 2000f, 2010f))) { byteArrayOf(2) } }
+            assertEquals(setOf(0L, 2L), BlockChanges.capture(body)!!.dirty.keys)
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            assertTrue(BlockChanges.capture(body)!!.dirty.isEmpty())
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+                putString("stream", "\nBLOCK_CHANGES noteBytes=${body.length()} settingsSnapshotNoteBytes=0 failureRetained=true missingRemoteRepaired=true\n")
+            })
+        }
+    }
+    private fun placedStroke(id: Long, y: Float, endY: Float = y + 20): jp.handwriting.note.editor.OrderedEdits.Entry<jp.handwriting.note.editor.EditorStroke> {
+        val brush = androidx.ink.brush.Brush.createWithColorIntArgb(androidx.ink.brush.StockBrushes.marker(), 0xff202b33.toInt(), 3f, 0.1f)
+        val inputs = androidx.ink.strokes.MutableStrokeInputBatch()
+            .add(androidx.ink.brush.InputToolType.STYLUS, 100f, y, 0, pressure = 0.5f)
+            .add(androidx.ink.brush.InputToolType.STYLUS, 120f, endY, 20, pressure = 0.5f)
+        return jp.handwriting.note.editor.OrderedEdits.Entry(id, jp.handwriting.note.editor.EditorStroke(androidx.ink.strokes.Stroke(brush, inputs)))
+    }
+    @Test fun visibleOpenLoadsOnlySpatialBandsAndPartialSavePreservesUnreadInk() = runBlocking {
+        fixture { directory, _, _, storage, manifests ->
+            val original = manifests.first()
+            val files = storage.noteFiles()
+            val repository = NoteRepository(files, persist = { storage.write(it) })
+            val entries = listOf(placedStroke(1, 100f, 2500f), placedStroke(2, 10000f), placedStroke(3, 12000f))
+            val manifest = original.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
+            repository.save(NoteSnapshot(manifest, entries))
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            storage.releaseWorkingCopies()
+            val visible = repository.loadVisible(original.info.id, 1f)
+            assertTrue(visible.partial)
+            assertEquals(listOf(1L), visible.entries.map { it.id })
+            assertTrue(bodies(directory).isEmpty())
+            val further = repository.loadRegion(original.info.id, 12000f, 13000f, setOf(1L))
+            assertEquals(listOf(3L), further.map { it.id })
+            assertTrue(bodies(directory).isEmpty())
+            val moved = jp.handwriting.note.editor.OrderedEdits.Entry(1L, entries.first().value.translated(0f, 5000f))
+            val partial = listOf(moved) + further
+            val refs = listOf(StrokeRef(1, moved.value.storageId), manifest.strokes[1], manifest.strokes[2])
+            repository.save(NoteSnapshot(manifest.copy(strokes = refs), partial))
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            storage.releaseWorkingCopies()
+            val reloaded = repository.loadVisible(original.info.id, 1f)
+            assertTrue(reloaded.entries.isEmpty())
+            val crossed = repository.loadRegion(original.info.id, 6500f, 6800f, emptySet())
+            assertEquals(listOf(1L), crossed.map { it.id })
+            val full = repository.load(original.info.id)
+            assertEquals(listOf(1L, 2L, 3L), full.entries.map { it.id })
+            assertEquals(entries[1].value.storageId, full.entries[1].value.storageId)
+        }
+    }
+    @Test fun editorSavesUnreadReferencesAndHydratesWithoutBreakingUndoOrExport() = runBlocking {
+        fixture { directory, _, _, storage, manifests ->
+            val original = manifests.first()
+            val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
+            val entries = listOf(placedStroke(1, 100f), placedStroke(2, 10000f), placedStroke(3, 12000f))
+            repository.save(NoteSnapshot(original.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4), entries))
+            assertTrue(storage.awaitSync()); storage.releaseWorkingCopies()
+            val store = androidx.lifecycle.ViewModelStore()
+            val model = androidx.lifecycle.ViewModelProvider(store, androidx.lifecycle.ViewModelProvider.NewInstanceFactory())[
+                jp.handwriting.note.editor.EditorViewModel::class.java]
+            suspend fun waitUntil(test: () -> Boolean) { withTimeout(30000) { while (!test()) delay(10) } }
+            try {
+                withContext(Dispatchers.Main) {
+                    model.viewport.size(1000f, 1000f)
+                    model.configureStorage(context, directory, File(directory, "ui-cache"))
+                    model.start(directory)
+                }
+                waitUntil { !model.workspace.value.working }
+                withContext(Dispatchers.Main) { model.openNote(original.info.id) }
+                waitUntil { model.workspace.value.current?.id == original.info.id && !model.workspace.value.working }
+                assertTrue(model.edits.snapshot().any { it.id == 1L })
+                withContext(Dispatchers.Main) {
+                    model.viewport.restore(jp.handwriting.note.editor.ViewPosition(top = 12000f)); model.viewportChanged()
+                }
+                waitUntil { model.edits.snapshot().any { it.id == 3L } && !model.ui.value.busy }
+                withContext(Dispatchers.Main) { assertEquals(listOf(4L), model.edits.addAll(listOf(placedStroke(99, 12050f).value))) }
+                waitUntil { !model.workspace.value.saving && File(directory, "notes/${original.info.id}.misq").exists() }
+                assertEquals(listOf(1L, 2L, 3L, 4L), NoteFiles(File(directory, "notes")).read(original.info.id).manifest.strokes.map { it.id })
+                val exported = withContext(Dispatchers.Main) { model.exportSnapshot(original.info.id) }
+                assertEquals(listOf(1L, 2L, 3L, 4L), exported.entries.map { it.id })
+                withContext(Dispatchers.Main) {
+                    assertTrue(model.edits.canUndo); model.edits.undo()
+                    assertEquals(listOf(1L, 2L, 3L), model.edits.snapshot().map { it.id })
+                    model.edits.redo(); model.closeNote()
+                }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+                withContext(Dispatchers.Main) { model.openNote(original.info.id) }
+                waitUntil { model.workspace.value.current?.id == original.info.id && !model.workspace.value.working }
+                assertTrue(model.edits.snapshot().map { it.id }.containsAll(listOf(3L, 4L)))
+                assertEquals(4, model.ui.value.strokes)
+                withContext(Dispatchers.Main) { model.closeNote() }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+            } finally { withContext(Dispatchers.Main) { store.clear() } }
+        }
+    }
+    @Test fun partialEditIsJournaledBeforeDownloadAndRecoveredAfterReadFailure() = runBlocking {
+        fixture { directory, _, scope, storage, manifests ->
+            val original = manifests.first(); val files = storage.noteFiles()
+            val repository = NoteRepository(files, persist = { storage.write(it) })
+            val entries = listOf(placedStroke(1, 100f), placedStroke(2, 10000f))
+            val manifest = original.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 3)
+            repository.save(NoteSnapshot(manifest, entries)); assertTrue(storage.awaitSync())
+            storage.releaseWorkingCopies()
+            assertEquals(listOf(1L), repository.loadVisible(original.info.id, 1f).entries.map { it.id })
+            val changed = placedStroke(1, 300f)
+            callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", true) })
+            assertThrows(Exception::class.java) { repository.save(NoteSnapshot(manifest.copy(strokes = listOf(
+                StrokeRef(1, changed.value.storageId), manifest.strokes[1])), listOf(changed))) }
+            assertTrue(PartialNoteJournal.exists(File(directory, "notes"), original.info.id))
+            assertTrue(bodies(directory).isEmpty())
+            callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", false) })
+            val restarted = NotebookStorage(context, directory, scope)
+            assertTrue(restarted.initialize()); restarted.initializeRemote()
+            val loaded = NoteRepository(restarted.noteFiles()).load(original.info.id)
+            assertEquals(listOf(changed.value.storageId, entries[1].value.storageId), loaded.entries.map { it.value.storageId })
+            assertFalse(PartialNoteJournal.exists(File(directory, "notes"), original.info.id))
+        }
+    }
+    @Test fun initialViewportIsShownThenRestLoadsWithoutBlockingEditsAndStopsOnSwitchOrClose() = runBlocking {
+        fixture { directory, _, _, storage, manifests ->
+            val original = manifests.first()
+            val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
+            val entries = (1L..30L).map { placedStroke(it, (it - 1) * 10000f + 100) }
+            repository.save(NoteSnapshot(original.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 31), entries))
+            assertTrue(storage.awaitSync()); storage.releaseWorkingCopies()
+            val store = androidx.lifecycle.ViewModelStore()
+            val model = androidx.lifecycle.ViewModelProvider(store, androidx.lifecycle.ViewModelProvider.NewInstanceFactory())[
+                jp.handwriting.note.editor.EditorViewModel::class.java]
+            val firstFrame = java.util.concurrent.atomic.AtomicReference<List<Long>?>(null)
+            val usablePrefetch = java.util.concurrent.atomic.AtomicBoolean(false)
+            suspend fun waitUntil(test: () -> Boolean) { withTimeout(30000) { while (!test()) delay(10) } }
+            try {
+                withContext(Dispatchers.Main) {
+                    model.viewport.size(1000f, 1000f)
+                    model.configureStorage(context, directory, File(directory, "background-ui-cache")); model.start(directory)
+                    model.onCanvasChange = {
+                        if (model.workspace.value.current?.id == original.info.id && !model.workspace.value.working) {
+                            firstFrame.compareAndSet(null, model.edits.snapshot().map { it.id })
+                            if (model.ui.value.loadingRest && !model.ui.value.busy) usablePrefetch.set(true)
+                        }
+                    }
+                }
+                waitUntil { !model.workspace.value.working }
+                withContext(Dispatchers.Main) { model.openNote(original.info.id) }
+                waitUntil { firstFrame.get() != null && usablePrefetch.get() }
+                assertEquals(listOf(1L), firstFrame.get())
+                withContext(Dispatchers.Main) { assertEquals(listOf(31L), model.edits.addAll(listOf(placedStroke(99, 150f).value))) }
+                waitUntil { model.edits.snapshot().size == 31 && !model.ui.value.loadingRest && !model.ui.value.busy }
+                withContext(Dispatchers.Main) {
+                    assertTrue(model.edits.canUndo); model.edits.undo()
+                    assertEquals((1L..30L).toList(), model.edits.snapshot().map { it.id })
+                    model.edits.redo(); model.closeNote()
+                }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+                firstFrame.set(null)
+                withContext(Dispatchers.Main) { model.openNote(original.info.id) }
+                waitUntil { firstFrame.get() != null }
+                assertEquals(listOf(1L, 31L), firstFrame.get())
+                withContext(Dispatchers.Main) { model.openNote(manifests.last().info.id) }
+                waitUntil { model.workspace.value.current?.id == manifests.last().info.id && !model.workspace.value.working }
+                delay(300)
+                assertTrue(model.edits.snapshot().isEmpty())
+                assertFalse(model.ui.value.loadingRest)
+                withContext(Dispatchers.Main) { model.closeNote() }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+                firstFrame.set(null)
+                withContext(Dispatchers.Main) { model.openNote(original.info.id) }
+                waitUntil { firstFrame.get() != null }
+                withContext(Dispatchers.Main) { model.closeNote() }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+                delay(300)
+                assertTrue(model.edits.snapshot().isEmpty())
+                assertFalse(model.ui.value.loadingRest)
+            } finally { withContext(Dispatchers.Main) { store.clear() } }
+        }
+    }
+    @Test fun largeNoteEditUploadsOnlyChangedBlocksAndAliasesRemainReadable() = runBlocking {
+        fixture { directory, tree, _, storage, manifests ->
+            val id = manifests.first().info.id
+            val files = storage.noteFiles(); files.read(id)
+            storage.write {
+                java.io.FileOutputStream(files.document(id).file, true).use { output ->
+                    val random = kotlin.random.Random(1234)
+                    repeat(8) { output.write(random.nextBytes(BlockPackedFiles.BLOCK_SIZE)) }
+                    output.fd.sync()
+                }
+            }
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            val blocks = PackedDocumentFiles(context.contentResolver, tree, "inkdata/.blocks")
+            val before = blocks.names()
+            val start = System.nanoTime()
+            storage.write { files.rename(id, "changed blocks") }
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            val elapsedMs = (System.nanoTime() - start) / 1_000_000
+            val added = blocks.names() - before
+            val bytes = added.sumOf { blocks.read(it).size.toLong() }
+            assertEquals(2, added.size)
+            assertTrue(bytes < 2L * BlockPackedFiles.BLOCK_SIZE)
+            val raw = PackedDocumentFiles(context.contentResolver, tree, "inkdata")
+            raw.names()
+            val descriptor = raw.read("$id.misq")
+            assertNotNull(BlockPackedFiles.inspect(descriptor.inputStream()))
+            assertTrue(descriptor.size < 4096)
+            val alias = "${UUID.randomUUID()}.misq"
+            raw.write(alias, descriptor)
+            val conflicts = ConflictDocuments(context.contentResolver, File(directory, "alias-cache"))
+            val found = conflicts.scan(tree).single()
+            assertEquals(alias, found.name)
+            assertEquals("changed blocks", MisqFile(found.file, readOnlyAlias = true).summary().title)
+            assertEquals(1, conflicts.scan(tree).size)
+            storage.releaseWorkingCopies()
+            assertEquals("changed blocks", files.read(id).manifest.info.title)
+            InstrumentationRegistry.getInstrumentation().sendStatus(0, Bundle().apply {
+                putString("stream", "\nBLOCK_SAVE noteBytes=${files.document(id).file.length()} uploadedBlockBytes=$bytes blocks=${added.size} saveMs=$elapsedMs\n")
+            })
+        }
+    }
+    @Test fun previewAndBodyArePublishedTogetherWithoutAnExtraRevision() = runBlocking {
+        fixture { _, tree, _, storage, manifests ->
+            val physical = MisqDocumentFiles(context.contentResolver, tree)
+            fun sequence(): Long = physical.names().filter { it.startsWith("revision-") && it.endsWith(".json") }
+                .max().substring(9, 29).toLong()
+            val before = sequence()
+            val id = manifests.first().info.id
+            val files = storage.noteFiles(); files.read(id)
+            var prepared = false
+            storage.beforeExternalSave = {
+                if (!prepared) {
+                    prepared = true
+                    withContext(Dispatchers.IO) {
+                        storage.write {
+                            val thumbnail = files.thumbnail(id)
+                            thumbnail.parentFile!!.mkdirs(); thumbnail.writeBytes(byteArrayOf(4, 5, 6))
+                            files.markThumbnailCurrent(id)
+                        }
+                    }
+                }
+            }
+            storage.write { files.rename(id, "body and preview") }
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            // The preview requested another save while the first save was being prepared.
+            assertTrue(withTimeout(30000) { storage.awaitSync() })
+            assertTrue(prepared)
+            assertEquals(before + 1, sequence())
+            storage.releaseWorkingCopies()
+            assertEquals("body and preview", files.read(id).manifest.info.title)
+            assertArrayEquals(byteArrayOf(4, 5, 6), files.document(id).thumbnail())
+        }
+    }
     @Test fun migrationLazyOpenSaveReleaseRestartAndSwitchBackToInternal() = runBlocking {
         fixture { directory, _, scope, storage, manifests ->
             assertTrue(bodies(directory).isEmpty())

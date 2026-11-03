@@ -63,6 +63,7 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
     LaunchedEffect(note.id, note.paper, ui.contentRevision, ui.busy, renderContent) {
         if (ui.busy || !renderContent) return@LaunchedEffect
         delay(300)
+        if (model.requestFullContent()) return@LaunchedEffect
         val entries = model.edits.snapshot()
         val bottom = maxOf(1000f, model.contentBottom + 24f)
         document = withContext(Dispatchers.Default) {

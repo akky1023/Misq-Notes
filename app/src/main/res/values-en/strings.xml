@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="loading_note">Loading note</string>
+    <string name="loading_region">Loading this area</string>
     <string name="storage_conflict">The storage location also has changes. Both versions are preserved. Choose another empty location to save the version on this device.</string>
     <string name="storage_incoming">Updates were downloaded. Reopen the app to apply them.</string>
     <string name="lasso_free">Free</string>

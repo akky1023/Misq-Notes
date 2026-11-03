@@ -17,6 +17,7 @@ import java.io.FileNotFoundException
 class WorkingSetDocumentsProvider : DocumentsProvider() {
     private val root get() = File(context!!.cacheDir, "working-set-provider").canonicalFile.also { it.mkdirs() }
     private var failWrites = false
+    private var failReads = false
     override fun onCreate() = true
     private fun file(id: String): File {
         val file = File(root, id).canonicalFile
@@ -60,11 +61,13 @@ class WorkingSetDocumentsProvider : DocumentsProvider() {
         val target = file(documentId); check(target != root.canonicalFile); check(target.deleteRecursively())
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
+        if (failReads && mode == "r") throw FileNotFoundException("Simulated unavailable external reads")
         if (failWrites && mode != "r") throw FileNotFoundException("Simulated unavailable external folder")
         return ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
     }
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         if (method == "test-fail-writes") { failWrites = extras!!.getBoolean("fail"); return Bundle() }
+        if (method == "test-fail-reads") { failReads = extras!!.getBoolean("fail"); return Bundle() }
         if (method == "test-new-tree") {
             val id = java.util.UUID.randomUUID().toString(); check(File(root, id).mkdir())
             val tree = DocumentsContract.buildTreeDocumentUri("net.neomenia.misqnotes.probe.tests.working-set", id)

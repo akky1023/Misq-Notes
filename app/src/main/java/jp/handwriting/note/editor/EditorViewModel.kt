@@ -37,14 +37,19 @@ data class EditorUi(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val contentRevision: Long = 0,
+    val loadingRegion: Boolean = false,
+    val loadingRest: Boolean = false,
 )
 class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageRecord?, val storageId: String) {
     constructor(ink: Stroke, storageId: String = UUID.randomUUID().toString()) : this(ink, null, storageId)
     constructor(image: ImageRecord, storageId: String = UUID.randomUUID().toString()) : this(null, image, storageId)
     val ink: Stroke get() = checkNotNull(inkOrNull)
-    val bounds: Box? = image?.let { androidx.ink.geometry.ImmutableBox.fromTwoPoints(
+    val bounds: Box? by lazy { image?.let { androidx.ink.geometry.ImmutableBox.fromTwoPoints(
         androidx.ink.geometry.ImmutableVec(it.left, it.top), androidx.ink.geometry.ImmutableVec(it.left + it.width, it.top + it.height))
-    } ?: inkOrNull?.shape?.computeBoundingBox()
+    } ?: inkOrNull?.shape?.computeBoundingBox() }
+    internal val placement: StrokePlacement get() = bounds.let { box ->
+        StrokePlacement(image?.top ?: ink.inputs[0].y, box?.yMin ?: 0f, box?.yMax ?: 0f)
+    }
     internal fun translated(dx: Float, dy: Float): EditorStroke {
         image?.let { return EditorStroke(it.translated(dx, dy)) }
         val moved = MutableStrokeInputBatch()
@@ -102,7 +107,7 @@ class EditorViewModel : ViewModel() {
     private val mutableLibrary = MutableStateFlow(LibraryUi())
     internal val library = mutableLibrary.asStateFlow()
     private var librarySaves: SaveQueue<LibraryPreferences>? = null
-    internal val contentBottom get() = index.bottom
+    internal val contentBottom get() = maxOf(index.bottom, if (lazyBase != null) lazyBottom else 0f)
     private var penColor = mutableUi.value.color
     private var penSize = mutableUi.value.size
     private var selectionWorking = false
@@ -125,7 +130,20 @@ class EditorViewModel : ViewModel() {
     internal var canvasRevision = 0L
         private set
     private var repository: NoteRepository? = null
-    private data class PendingSave(val info: NoteInfo, val nextId: Long, val entries: List<OrderedEdits.Entry<EditorStroke>>)
+    private data class PendingSave(val info: NoteInfo, val nextId: Long, val entries: List<OrderedEdits.Entry<EditorStroke>>,
+        val baseRefs: List<StrokeRef> = emptyList(), val hydrated: Set<Long> = emptySet())
+    private var lazyBase: NoteManifest? = null
+    private var lazyBottom = 0f
+    private val hydrated = mutableSetOf<Long>()
+    private var regionJob: kotlinx.coroutines.Job? = null
+    private var backgroundLoadJob: kotlinx.coroutines.Job? = null
+    private var backgroundRun = 0L
+    private var backgroundLoading = false
+    private var regionLoading = false
+    private var regionTop = Float.NaN
+    private var regionBottom = Float.NaN
+    private var hydratingAll = false
+    private var initialAspect = 2f
     private var saves: SaveQueue<PendingSave>? = null
     private var previewSaves: SaveQueue<NoteSnapshot>? = null
     private var restoring = false
@@ -145,11 +163,12 @@ class EditorViewModel : ViewModel() {
     private var mergeJob: kotlinx.coroutines.Job? = null
     private var mergeToken = 0L
     private var mergeCache: File? = null
-    internal fun configureStorage(context: android.content.Context) {
-        mergeCache = File(context.cacheDir, "merge-reviews")
-        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(context.cacheDir, "conflict-sources"))
+    internal fun configureStorage(context: android.content.Context, directory: File = context.filesDir, cache: File = context.cacheDir) {
+        initialAspect = context.resources.displayMetrics.let { it.heightPixels.toFloat() / it.widthPixels.coerceAtLeast(1) }
+        mergeCache = File(cache, "merge-reviews")
+        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(cache, "conflict-sources"))
         if (notebookStorage == null) {
-            notebookStorage = NotebookStorage(context.applicationContext, context.filesDir, viewModelScope)
+            notebookStorage = NotebookStorage(context.applicationContext, directory, viewModelScope)
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
                 val custom = notebookStorage!!.uri != null
                 mutableWorkspace.value = mutableWorkspace.value.copy(syncing = custom && state.saving,
@@ -235,8 +254,10 @@ class EditorViewModel : ViewModel() {
                 previewSaves = SaveQueue(viewModelScope, batchMillis = 1000) { snapshot -> withContext(Dispatchers.IO) {
                     repository!!.updatePreview(snapshot)
                 } }
+                notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
                 saves = SaveQueue(viewModelScope, batchMillis = 500) { request -> withContext(Dispatchers.IO) {
-                    val refs = request.entries.map { StrokeRef(it.id, it.value.storageId) }
+                    val refs = (request.baseRefs.filter { it.id !in request.hydrated } +
+                        request.entries.map { StrokeRef(it.id, it.value.storageId) }).sortedBy { it.id }
                     val snapshot = NoteSnapshot(NoteManifest(request.info, refs, request.nextId), request.entries)
                     repository!!.save(snapshot)
                     previewSaves?.request(snapshot)
@@ -503,13 +524,21 @@ class EditorViewModel : ViewModel() {
     }
     fun openNote(id: String) {
         if (mutableWorkspace.value.working || repository == null) return
+        stopBackgroundLoading(); regionJob?.cancel()
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
         viewModelScope.launch {
-            try { notebookStorage?.keepOpen(id); enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
+            try { enter(withContext(Dispatchers.IO) { notebookStorage?.keepOpen(id); repository!!.loadVisible(id,
+                if (viewport.width > 1f) viewport.height / viewport.width else initialAspect) }) }
             catch (e: Exception) { fail(e) }
         }
     }
     private fun enter(note: LoadedNote) {
+        stopBackgroundLoading()
+        regionJob?.cancel()
+        lazyBase = note.manifest.takeIf { note.partial }
+        lazyBottom = note.contentBottom
+        hydrated.clear(); hydrated.addAll(note.entries.map { it.id })
+        hydratingAll = false; regionLoading = false; regionTop = Float.NaN; regionBottom = Float.NaN
         notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
@@ -526,23 +555,26 @@ class EditorViewModel : ViewModel() {
         lastGeneration = null
         restoring = false
         publish()
+        startBackgroundLoading()
     }
     fun closeNote() {
         if (mutableWorkspace.value.working) return
         closing = true
+        stopBackgroundLoading()
         mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
         viewModelScope.launch {
             try {
                 check(!mutableUi.value.busy) { AppMessages.text(R.string.wait_stroke_back) }
                 val generation = enqueueSave(force = true, allowClosing = true)
-                if (generation != null && !saves!!.await(generation)) {
+                if (generation != null && !saves!!.flush(generation)) {
                     mutableWorkspace.value = mutableWorkspace.value.copy(working = false)
                     closing = false
+                    startBackgroundLoading()
                     return@launch
                 }
-                preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
-                paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
-                previewSaves?.let { it.await(it.state.value.latest) }
+                preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
+                paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
+                previewSaves?.flush()
                 check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
                 withContext(Dispatchers.IO) {
                     notebookStorage?.keepOpen(null)
@@ -550,10 +582,12 @@ class EditorViewModel : ViewModel() {
                 }
                 restoring = true
                 mutableWorkspace.value = mutableWorkspace.value.copy(current = null, recovered = false)
+                regionJob?.cancel()
+                lazyBase = null; hydrated.clear(); hydratingAll = false; regionLoading = false
                 closing = false
                 edits.restore(emptyList()); restoring = false
                 refreshList()
-            } catch (e: Exception) { restoring = false; closing = false; fail(e) }
+            } catch (e: Exception) { restoring = false; closing = false; fail(e); startBackgroundLoading() }
         }
     }
     fun renameNote(id: String, title: String) = listAction { repository!!.rename(id, title.trim().ifEmpty { AppMessages.text(R.string.untitled) }) }
@@ -574,7 +608,7 @@ class EditorViewModel : ViewModel() {
     fun clearError() { mutableWorkspace.value = mutableWorkspace.value.copy(error = null, recovered = false) }
     fun retrySave() {
         viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true) }
+            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true); startBackgroundLoading() }
             catch (e: Exception) { fail(e) }
         }
     }
@@ -637,7 +671,7 @@ class EditorViewModel : ViewModel() {
         mutableWorkspace.value = mutableWorkspace.value.copy(current = updated, saving = true)
         lastRevision = edits.revision
         lastStamp = stamp
-        return queue.request(PendingSave(updated, edits.nextEntryId, entries)).also { lastGeneration = it }
+        return queue.request(PendingSave(updated, edits.nextEntryId, entries, lazyBase?.strokes.orEmpty(), hydrated.toSet())).also { lastGeneration = it }
     }
 
     internal suspend fun importDocument(context: android.content.Context, uri: android.net.Uri, noteId: String,
@@ -649,7 +683,7 @@ class EditorViewModel : ViewModel() {
         currentCoroutineContext().ensureActive()
         check(mutableWorkspace.value.current?.id == note.id && !edits.busy && !selectionWorking)
         clearSelection()
-        val top = maxOf(viewport.position.top, if (edits.snapshot().isEmpty()) 0f else contentBottom + 24f)
+        val top = maxOf(viewport.position.top, if (edits.snapshot().isEmpty() && lazyBase == null) 0f else contentBottom + 24f)
         var y = top
         val content = images.map { data ->
             val height = Viewport.WIDTH * data.height / data.width
@@ -877,7 +911,7 @@ class EditorViewModel : ViewModel() {
     }
     internal fun cancelSelectionMove() { selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f; selectionGesture = false; publish() }
     internal fun beginSpaceInsertion(y: Float): Boolean {
-        if (mutableUi.value.busy || !y.isFinite()) return false
+        if (mutableUi.value.busy || lazyBase != null || !y.isFinite()) return false
         clearSelection()
         // A stroke crossing the insertion line moves as a whole; never cut handwriting.
         edits.snapshot().filter { (it.value.bounds?.yMax ?: Float.NEGATIVE_INFINITY) >= y }
@@ -935,6 +969,7 @@ class EditorViewModel : ViewModel() {
         val info = mutableWorkspace.value.current
         if (info?.id == id) {
             check(!mutableUi.value.busy && !closing) { AppMessages.text(R.string.wait_stroke_export) }
+            hydrateAll()
             val entries = edits.snapshot()
             return NoteSnapshot(NoteManifest(info, entries.map { StrokeRef(it.id, it.value.storageId) }, edits.nextEntryId), entries)
         }
@@ -966,6 +1001,107 @@ class EditorViewModel : ViewModel() {
         mutableZoomPercent.value = viewport.zoomPercent
         mutableVisibleRegion.value = StrokeIndex.Bounds(viewport.position.left, viewport.position.top, viewport.right, viewport.bottom)
         updateSelectionOverlay()
+        requestVisibleRegion()
+    }
+    private fun requestVisibleRegion() {
+        val base = lazyBase ?: return
+        if (restoring || closing || hydratingAll) return
+        val top = (viewport.position.top - 500f).coerceAtLeast(0f)
+        val bottom = viewport.bottom + 500f
+        if (regionTop == top && regionBottom == bottom) return
+        regionTop = top; regionBottom = bottom
+        if (regionJob?.isActive == true) return
+        regionJob = viewModelScope.launch {
+            try {
+                do {
+                    val requestedTop = regionTop; val requestedBottom = regionBottom
+                    val loaded = hydrated.toSet()
+                    val needed = withContext(Dispatchers.IO) { repository!!.regionPending(base.info.id, requestedTop, requestedBottom, loaded) }
+                    if (needed) {
+                        regionLoading = true; publish()
+                        val entries = withContext(Dispatchers.IO) { repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) }
+                        while (edits.busy) kotlinx.coroutines.delay(16)
+                        if (lazyBase !== base || closing) return@launch
+                        val added = entries.filter { it.id !in hydrated }
+                        hydrated.addAll(added.map { it.id }); edits.hydrate(added)
+                        if (base.strokes.all { it.id in hydrated }) lazyBase = null
+                    }
+                } while (requestedTop != regionTop || requestedBottom != regionBottom)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { fail(e); regionTop = Float.NaN; regionBottom = Float.NaN }
+            finally { if (lazyBase === base || mutableWorkspace.value.current?.id == base.info.id) { regionLoading = false; publish() } }
+        }
+    }
+    private suspend fun hydrateAll() {
+        val base = lazyBase ?: return
+        hydratingAll = true
+        stopBackgroundLoading()
+        try {
+            regionJob?.cancel(); regionJob?.join()
+            regionLoading = true; publish()
+            val loaded = hydrated.toSet()
+            val entries = withContext(Dispatchers.IO) { repository!!.loadRegion(base.info.id, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, loaded) }
+            while (edits.busy) kotlinx.coroutines.delay(16)
+            check(lazyBase === base && !closing) { AppMessages.text(R.string.wait_note) }
+            val added = entries.filter { it.id !in hydrated }
+            hydrated.addAll(added.map { it.id }); edits.hydrate(added)
+            lazyBase = null
+        } finally { hydratingAll = false; regionLoading = false; publish() }
+    }
+    private fun stopBackgroundLoading() {
+        backgroundRun++
+        backgroundLoadJob?.cancel(); backgroundLoadJob = null
+        backgroundLoading = false
+    }
+    private fun startBackgroundLoading() {
+        val base = lazyBase ?: return
+        if (closing || hydratingAll || backgroundLoadJob?.isActive == true) return
+        stopBackgroundLoading()
+        val run = backgroundRun
+        backgroundLoading = true
+        backgroundLoadJob = viewModelScope.launch {
+            try {
+                kotlinx.coroutines.delay(100) // Present the initial viewport before prefetch work.
+                val context = currentCoroutineContext()
+                fun active() = backgroundRun == run && lazyBase === base && !closing
+                fun interacting() = edits.busy || selectionWorking || selectionGesture || insertingSpace ||
+                    regionJob?.isActive == true || hydratingAll
+                while (active()) {
+                    while (active() && interacting()) kotlinx.coroutines.delay(20)
+                    if (!active()) break
+                    val loaded = hydrated.toSet()
+                    val top = viewport.position.top; val bottom = viewport.bottom
+                    val entries = withContext(Dispatchers.IO) {
+                        repository!!.loadNextRegion(base.info.id, top, bottom, loaded) { context.ensureActive() }
+                    }
+                    if (!active()) break
+                    if (entries.isEmpty()) { lazyBase = null; break }
+                    for (batch in entries.chunked(128)) {
+                        while (active() && interacting()) kotlinx.coroutines.delay(16)
+                        if (!active()) return@launch
+                        val added = batch.filter { it.id !in hydrated }
+                        hydrated.addAll(added.map { it.id }); edits.hydrate(added)
+                        if (base.strokes.all { it.id in hydrated }) lazyBase = null
+                        kotlinx.coroutines.delay(16)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { if (backgroundRun == run && lazyBase === base) fail(e) }
+            finally { if (backgroundRun == run) { backgroundLoading = false; publish() } }
+        }
+        publish()
+    }
+    internal fun requestFullContent(): Boolean {
+        if (lazyBase == null) return false
+        startBackgroundLoading()
+        return true
+    }
+    internal fun prepareSpaceInsertion(y: Float, ready: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try { hydrateAll(); ready(beginSpaceInsertion(y)) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { fail(e); ready(false) }
+        }
     }
     fun brushForPressure(supported: Boolean) = if (supported) brush else fixedWidthBrush
     fun buttonChanged() = publish()
@@ -1010,11 +1146,13 @@ class EditorViewModel : ViewModel() {
         mutableUi.value = mutableUi.value.copy(
             temporaryEraser = penButton.held,
             temporaryLasso = penButton.lassoHeld,
-            strokes = edits.entries.size,
-            contentRevision = edits.revision,
-            busy = edits.busy || selectionWorking || selectionGesture,
-            canUndo = edits.canUndo && !selectionWorking && !selectionGesture,
-            canRedo = edits.canRedo && !selectionWorking && !selectionGesture,
+            strokes = edits.entries.size + (lazyBase?.strokes?.size?.minus(hydrated.size) ?: 0),
+            contentRevision = canvasRevision,
+            loadingRegion = regionLoading,
+            loadingRest = backgroundLoading,
+            busy = edits.busy || selectionWorking || selectionGesture || regionLoading,
+            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading,
+            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading,
             selectionCount = selection.size,
         )
         updateViewportOverlay()

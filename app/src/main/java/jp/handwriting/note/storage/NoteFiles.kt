@@ -27,10 +27,17 @@ internal interface NoteBacking {
     fun summaries(): List<NoteSummary>
     fun deleted(id: String)
     fun preview(id: String): File
+    fun spatial(id: String): SpatialNoteCache.Source? = null
 }
 
 /** IO-thread confined. Each manifest is committed only after all referenced stroke blobs exist. */
 class NoteFiles(directory: File, private val singleFile: Boolean = true) {
+    internal fun spatial(id: String): SpatialNoteCache.Source? =
+        if (File(root, "${uuid(id)}.misq").exists()) null else backing?.spatial(id)
+    internal fun needsPlacements(id: String, values: Map<String, StrokePlacement>): Boolean = values.isNotEmpty() &&
+        (!packed(id) || values.any { document(id).index().placements[it.key] != it.value })
+    internal fun hasLocalBody(id: String) = File(root, "${uuid(id)}.misq").exists() || manifestFile(id).exists()
+    internal fun hasExternal(id: String) = backing?.contains(id) == true
     internal var backing: NoteBacking? = null
     private val root = directory.absoluteFile.normalize().also { check(it.isDirectory || it.mkdirs()) }
     internal val directory get() = root
@@ -74,6 +81,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     fun markThumbnailCurrent(id: String) {
         if (packed(id) && !document(id).thumbnailCurrent()) document(id).saveThumbnail(thumbnail(id).readBytes())
         thumbnail(id).setLastModified(if (packed(id)) document(id).file.lastModified() else manifestFile(id).lastModified())
+        if (packed(id)) runCatching { BlockChanges.update(document(id).file, document(id).index()) }
     }
     fun invalidateThumbnail(id: String) { thumbnail(id).takeIf { it.exists() }?.setLastModified(0) }
     internal fun storedThumbnail(id: String): File? {
@@ -143,23 +151,8 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         decodeManifest(id, readEnvelope(backup))
     }.getOrNull()
 
-    internal fun decodeManifest(id: String, bytes: ByteArray): NoteManifest {
-        // Share the parser without altering either live generation.
-        val input = DataInputStream(ByteArrayInputStream(bytes))
-        require(input.readInt() == 0x484E4D31)
-        val version = input.readInt(); require(version in 1..4)
-        val storedId = uuid(input.readUTF()); require(storedId == id)
-        val title = validTitle(input.readUTF()); val created = input.readLong(); val updated = input.readLong()
-        val view = ViewPosition(input.readFloat(), input.readFloat(), input.readFloat())
-        val color = input.readInt(); val size = input.readFloat(); require(size.isFinite() && size in 0.1f..100f)
-        val paper = if (version >= 2) NotePaper(input.readInt(), PaperPattern.entries[input.readInt()], input.readInt(), input.readInt(),
-            if (version >= 3) input.readFloat() else 1f).let { if (version >= 4) it.readMargin(input) else it } else NotePaper()
-        val next = input.readLong(); val count = input.readInt(); require(next > 0 && count in 0..1_000_000)
-        val refs = List(count) { StrokeRef(input.readLong().also { require(it > 0 && it < next) }, uuid(input.readUTF())) }
-        require(refs.map { it.id }.distinct().size == count && refs.map { it.storageId }.distinct().size == count && input.available() == 0)
-        return NoteManifest(NoteInfo(id, title, created, updated, view, color, size, paper), refs, next)
-    }
-    fun save(note: NoteManifest, encode: (String) -> ByteArray) {
+    internal fun decodeManifest(id: String, bytes: ByteArray): NoteManifest = NoteManifestCodec.decodeManifest(id, bytes)
+    fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
         if (singleFile) {
             val target = document(note.info.id)
             if (!target.file.exists() && manifestFile(note.info.id).exists()) {
@@ -168,7 +161,8 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
                 target.save(original) { old.stroke(note.info.id, it) }
                 thumbnail(note.info.id).takeIf { it.exists() }?.let { target.saveThumbnail(it.readBytes()) }
             }
-            target.save(note, encode)
+            target.save(note, placements, encode)
+            runCatching { BlockChanges.update(target.file, target.index()) }
             return
         }
         val dir = folder(note.info.id); check(dir.isDirectory || dir.mkdirs())
@@ -183,26 +177,16 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         }
         atomicWrite(manifestFile(note.info.id), encodeManifest(note))
     }
-    internal fun encodeManifest(note: NoteManifest): ByteArray = ByteArrayOutputStream().also { buffer -> DataOutputStream(buffer).use { out ->
-            out.writeInt(0x484E4D31); out.writeInt(4)
-            out.writeUTF(uuid(note.info.id)); out.writeUTF(validTitle(note.info.title))
-            out.writeLong(note.info.createdAt); out.writeLong(note.info.updatedAt)
-            out.writeFloat(note.info.position.zoom); out.writeFloat(note.info.position.left); out.writeFloat(note.info.position.top)
-            out.writeInt(note.info.color); out.writeFloat(note.info.size)
-            out.writeInt(note.info.paper.color); out.writeInt(note.info.paper.pattern.ordinal); out.writeInt(note.info.paper.lineColor); out.writeInt(note.info.paper.spacing)
-            out.writeFloat(note.info.paper.lineWidth); note.info.paper.writeMargin(out)
-            out.writeLong(note.nextId)
-            out.writeInt(note.strokes.size)
-            // New IDs were validated by strokeFile; loaded IDs by stroke(). Revalidating every
-            // unchanged UUID and constructing its File on each pen lift adds no integrity check.
-            note.strokes.forEach { out.writeLong(it.id); out.writeUTF(it.storageId) }
-        } }.toByteArray()
+    internal fun encodeManifest(note: NoteManifest): ByteArray = NoteManifestCodec.encodeManifest(note)
     fun stroke(note: String, storageId: String): ByteArray {
         if (packed(note)) return document(note).stroke(uuid(storageId))
         val bytes = readWithBackup(strokeFile(note, storageId)).first
         known.getOrPut(note) { mutableSetOf() }.add(storageId)
         return bytes
     }
+    internal fun <T> readStrokes(id: String, refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> =
+        if (packed(id)) document(id).readStrokes(refs, decode)
+        else refs.map { decode(it, stroke(id, it.storageId)) }
     fun rename(id: String, title: String) {
         val note = read(id).manifest
         save(note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))) { error("Existing stroke missing") }
@@ -212,7 +196,10 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         uuid(id)
         val versions = root.listFiles().orEmpty().filter { file ->
             file.isFile && file.extension.equals("misq", true) &&
-                runCatching { MisqFile(file, readOnlyAlias = true).readManifest().manifest.info.id == id }.getOrDefault(false)
+                runCatching {
+                    val source = MisqFile(file, readOnlyAlias = true)
+                    runCatching { source.summary().id }.getOrElse { source.readManifest().manifest.info.id } == id
+                }.getOrDefault(false)
         }
         delete(id)
         versions.filter { it.exists() }.forEach { file ->
@@ -222,6 +209,8 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
     fun delete(id: String) {
         backing?.deleted(uuid(id))
+        BlockChanges.forget(File(root, "$id.misq"))
+        if (PartialNoteJournal.exists(root, id)) PartialNoteJournal.clear(root, id)
         // A deletion does not need to download the external notebook first.
         documents.remove(id)
         val packedFile = File(root, "$id.misq")
