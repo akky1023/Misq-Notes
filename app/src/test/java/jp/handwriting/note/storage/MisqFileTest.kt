@@ -239,4 +239,86 @@ class MisqFileTest {
         assertEquals(empty, files.document(empty.info.id).previous())
         RandomAccessFile(file, "r").use { assertEquals(0x4D49535130303032L, it.readLong()) }
     }
+    @Test fun appendOnlySavesBoundIndexGrowthWithoutAnOrphanSweep() {
+        val (files, empty) = note()
+        var manifest = empty
+        val packed = files.document(empty.info.id)
+        var shrank = false
+        repeat(360) { number ->
+            val added = ref(number + 1L)
+            manifest = manifest.copy(strokes = manifest.strokes + added, nextId = number + 2L)
+            val before = packed.file.length()
+            packed.save(manifest) { byteArrayOf(1, 2, 3) }
+            if (packed.file.length() < before) shrank = true
+        }
+        assertTrue("Ordinary additions must reclaim accumulated indexes", shrank)
+        val reopened = MisqFile(packed.file)
+        assertEquals(manifest, reopened.readManifest().manifest)
+        assertEquals(360, reopened.index().events.size)
+        assertEquals(360, reopened.index().records.size)
+        manifest.strokes.forEach { assertArrayEquals(byteArrayOf(1, 2, 3), reopened.stroke(it.storageId)) }
+    }
+    @Test fun compactionPreservesDeletedPayloadsBothCommitsAndTheirPreviews() {
+        val (files, empty) = note(); val a = ref(1); val b = ref(2)
+        val original = empty.copy(strokes = listOf(a, b), nextId = 3)
+        files.save(original) { if (it == a.storageId) byteArrayOf(1) else byteArrayOf(2) }
+        val packed = files.document(empty.info.id)
+        packed.saveThumbnail(byteArrayOf(4))
+        packed.save(original.copy(strokes = listOf(b))) { error("already stored") }
+        packed.saveThumbnail(byteArrayOf(5))
+        val before = packed.indexes()
+        packed.file.appendBytes(ByteArray(9 * 1024 * 1024))
+        packed.compactIfNeeded()
+        val after = MisqFile(packed.file).indexes()
+        assertEquals(2, after.size)
+        before.zip(after).forEach { (old, current) ->
+            assertEquals(old.copy(generation = current.generation, records = current.records, thumbnail = current.thumbnail), current)
+            assertEquals(old.records.mapValues { it.value.hash }, current.records.mapValues { it.value.hash })
+            assertEquals(old.thumbnail?.hash, current.thumbnail?.hash)
+        }
+        assertArrayEquals(byteArrayOf(1), packed.stroke(a.storageId))
+        assertTrue(packed.index().events.any { it.blob == null })
+        // Damage the newest commit to exercise recovery through the retained slot.
+        val newest = after.first()
+        RandomAccessFile(packed.file, "rw").use { it.seek(8L + newest.generation % 2 * 192 + 8); it.writeLong(0) }
+        val fallback = MisqFile(packed.file)
+        assertTrue(fallback.readManifest().recovered)
+        assertEquals(before[1].manifest, fallback.readManifest().manifest)
+        assertArrayEquals(byteArrayOf(4), fallback.thumbnail())
+    }
+    @Test fun corruptHistoricalPayloadPreventsReplacementButDoesNotFailADurableSave() {
+        val (files, empty) = note(); val a = ref(1)
+        files.save(empty.copy(strokes = listOf(a), nextId = 2)) { byteArrayOf(1) }
+        val packed = files.document(empty.info.id)
+        packed.save(empty.copy(nextId = 2)) { error("deleted") }
+        RandomAccessFile(packed.file, "rw").use {
+            it.seek(packed.index().records.getValue(a.storageId).offset); it.write(2)
+        }
+        packed.file.appendBytes(ByteArray(9 * 1024 * 1024))
+        val before = NotebookArchive.digest(packed.file)
+        assertThrows(IllegalArgumentException::class.java) { packed.compactIfNeeded() }
+        assertEquals(before, NotebookArchive.digest(packed.file))
+        assertFalse(File(packed.file.path + ".compact").exists())
+        val saved = empty.copy(info = empty.info.copy(title = "saved"), nextId = 2)
+        packed.save(saved) { error("deleted") }
+        assertEquals(saved, MisqFile(packed.file).readManifest().manifest)
+    }
+    @Test fun unchangedSaveAndPreviewUpdateAlsoReclaimObsoleteAppends() {
+        val (files, empty) = note(); val a = ref(1)
+        val manifest = empty.copy(strokes = listOf(a), nextId = 2)
+        files.save(manifest) { byteArrayOf(1) }
+        val packed = files.document(empty.info.id)
+        val events = packed.index().events
+        packed.file.appendBytes(ByteArray(9 * 1024 * 1024))
+        packed.save(manifest) { error("unchanged") }
+        assertTrue(packed.file.length() < 1024 * 1024)
+        packed.file.appendBytes(ByteArray(9 * 1024 * 1024))
+        packed.saveThumbnail(byteArrayOf(5))
+        val reopened = MisqFile(packed.file)
+        assertTrue(packed.file.length() < 1024 * 1024)
+        assertEquals(manifest, reopened.readManifest().manifest)
+        assertEquals(events, reopened.index().events)
+        assertArrayEquals(byteArrayOf(1), reopened.stroke(a.storageId))
+        assertArrayEquals(byteArrayOf(5), reopened.thumbnail())
+    }
 }
