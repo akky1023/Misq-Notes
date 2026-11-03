@@ -202,13 +202,14 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
             recent = LoadedNote(snapshot.manifest, snapshot.entries, false)
         } finally { temporary.delete() }
     }
-    @Synchronized internal fun loadVisible(id: String, aspect: Float): LoadedNote {
+    @Synchronized internal fun loadVisible(id: String, aspect: Float, position: jp.handwriting.note.editor.ViewPosition? = null): LoadedNote {
         spatialSource = null
         fun fallback(): LoadedNote = load(id).also { if (!it.recovered && files.hasExternal(id)) persist {} }
         val source = runCatching { files.spatial(id) }.getOrNull() ?: return fallback()
         val manifest = source.manifest
-        val top = manifest.info.position.top
-        val height = (1000f * aspect / manifest.info.position.zoom).coerceAtLeast(1000f)
+        val viewport = position ?: manifest.info.position
+        val top = viewport.top
+        val height = (1000f * aspect / viewport.zoom).coerceAtLeast(1000f)
         return try {
             val entries = source.load((top - 500f).coerceAtLeast(0f), top + height + 500f, emptySet()) { ref, bytes ->
                 OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))

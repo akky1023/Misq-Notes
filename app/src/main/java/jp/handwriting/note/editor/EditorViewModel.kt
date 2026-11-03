@@ -147,6 +147,9 @@ class EditorViewModel : ViewModel() {
     private var initialAspect = 2f
     private var saves: SaveQueue<PendingSave>? = null
     private var previewSaves: SaveQueue<NoteSnapshot>? = null
+    private var viewPositions: NoteViewPositions? = null
+    private var positionSaves: SaveQueue<Pair<String, ViewPosition>>? = null
+    private var lastPosition: Pair<String, ViewPosition>? = null
     private var restoring = false
     private var lastRevision = -1L
     private var starting = false
@@ -183,7 +186,8 @@ class EditorViewModel : ViewModel() {
         if (notebookStorage?.uri == null) mutableWorkspace.value = mutableWorkspace.value.copy(syncing = false, syncError = null)
     }
     private var closing = false
-    private data class SaveStamp(val note: String, val revision: Long, val position: ViewPosition, val color: Int, val size: Float, val paper: NotePaper)
+    // Viewport changes are saved locally and never make a note dirty.
+    private data class SaveStamp(val note: String, val revision: Long, val color: Int, val size: Float, val paper: NotePaper)
     private var lastStamp: SaveStamp? = null
     private var lastGeneration: Long? = null
     var onCanvasChange: (() -> Unit)? = null
@@ -219,6 +223,10 @@ class EditorViewModel : ViewModel() {
                 if (needsRemote) notebookStorage?.initializeRemote()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
                 workMessage(R.string.operation_loading_settings)
+                viewPositions = NoteViewPositions(File(directory, "view-positions"))
+                positionSaves = SaveQueue(viewModelScope, batchMillis = 500) { (id, position) ->
+                    withContext(Dispatchers.IO) { viewPositions!!.write(id, position) }
+                }
                 repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
                     NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
@@ -405,7 +413,7 @@ class EditorViewModel : ViewModel() {
                         finally { restoring = false }
                         mutableWorkspace.value = mutableWorkspace.value.copy(current = automatic.manifest.info)
                         lastRevision = edits.revision
-                        lastStamp = SaveStamp(automatic.manifest.info.id, edits.revision, viewport.position, penColor, penSize, automatic.manifest.info.paper)
+                        lastStamp = SaveStamp(automatic.manifest.info.id, edits.revision, penColor, penSize, automatic.manifest.info.paper)
                         publish()
                     }
                     mutableWorkspace.value = mutableWorkspace.value.copy(notes = withContext(Dispatchers.IO) { repository!!.list() })
@@ -536,15 +544,19 @@ class EditorViewModel : ViewModel() {
         beginWork(R.string.loading_note)
         viewModelScope.launch {
             try {
-                val loaded = withContext(Dispatchers.IO) { notebookStorage?.keepOpen(id); repository!!.loadVisible(id,
-                    if (viewport.width > 1f) viewport.height / viewport.width else initialAspect) }
+                val (loaded, position) = withContext(Dispatchers.IO) {
+                    val position = viewPositions?.read(id)
+                    notebookStorage?.keepOpen(id)
+                    repository!!.loadVisible(id,
+                        if (viewport.width > 1f) viewport.height / viewport.width else initialAspect, position) to position
+                }
                 workMessage(R.string.operation_preparing_note)
-                enter(loaded)
+                enter(loaded, position)
             }
             catch (e: Exception) { fail(e) }
         }
     }
-    private fun enter(note: LoadedNote) {
+    private fun enter(note: LoadedNote, position: ViewPosition? = null) {
         stopBackgroundLoading()
         regionJob?.cancel()
         lazyBase = note.manifest.takeIf { note.partial }
@@ -554,7 +566,8 @@ class EditorViewModel : ViewModel() {
         notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
-        viewport.restore(note.manifest.info.position)
+        viewport.restore(position ?: note.manifest.info.position)
+        lastPosition = note.manifest.info.id to viewport.position
         clearSelection()
         penColor = note.manifest.info.color; penSize = PenStyle.displayWidth(note.manifest.info.size)
         paletteTool = EditorTool.PEN; refreshPalette()
@@ -563,7 +576,7 @@ class EditorViewModel : ViewModel() {
         edits.restore(note.entries, note.manifest.nextId)
         lastRevision = edits.revision
         mutableWorkspace.value = mutableWorkspace.value.copy(current = note.manifest.info, working = false, error = null, recovered = note.recovered)
-        lastStamp = if (note.recovered) null else SaveStamp(note.manifest.info.id, edits.revision, viewport.position, mutableUi.value.color, mutableUi.value.size, note.manifest.info.paper)
+        lastStamp = if (note.recovered) null else SaveStamp(note.manifest.info.id, edits.revision, mutableUi.value.color, mutableUi.value.size, note.manifest.info.paper)
         lastGeneration = null
         restoring = false
         publish()
@@ -571,6 +584,7 @@ class EditorViewModel : ViewModel() {
     }
     fun closeNote() {
         if (mutableWorkspace.value.working) return
+        saveViewportPosition()
         closing = true
         stopBackgroundLoading()
         beginWork(R.string.saving, clearError = false)
@@ -584,6 +598,7 @@ class EditorViewModel : ViewModel() {
                     startBackgroundLoading()
                     return@launch
                 }
+                check(positionSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 previewSaves?.flush()
@@ -644,7 +659,16 @@ class EditorViewModel : ViewModel() {
             viewModelScope.launch { try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; refreshList() } catch (e: Exception) { fail(e) } }
         }
     }
-    fun viewportChanged() { updateViewportOverlay(); enqueueSave(force = true) }
+    fun viewportChanged() { updateViewportOverlay(); saveViewportPosition() }
+    private fun saveViewportPosition() {
+        val id = mutableWorkspace.value.current?.id ?: return
+        val queue = positionSaves ?: return
+        if (restoring || closing || mutableWorkspace.value.working) return
+        val value = id to viewport.position
+        if (value == lastPosition && queue.state.value.error == null) return
+        lastPosition = value
+        queue.request(value)
+    }
     internal fun moveViewportFromPreview(left: Float, top: Float) {
         if (mutableUi.value.busy || mutableWorkspace.value.working || !left.isFinite() || !top.isFinite()) return
         viewport.restore(viewport.position.copy(left = left.coerceAtLeast(0f), top = top.coerceAtLeast(0f)))
@@ -687,7 +711,8 @@ class EditorViewModel : ViewModel() {
         val queue = saves ?: return null
         val info = mutableWorkspace.value.current ?: return null
         if (restoring || (closing && !allowClosing) || edits.busy || (!force && lastRevision == edits.revision)) return null
-        val stamp = SaveStamp(info.id, edits.revision, viewport.position, penColor, penSize, info.paper)
+        saveViewportPosition()
+        val stamp = SaveStamp(info.id, edits.revision, penColor, penSize, info.paper)
         if (stamp == lastStamp && queue.state.value.error == null) return if (force) lastGeneration else null
         val entries = edits.snapshot()
         val updated = info.copy(updatedAt = System.currentTimeMillis(), position = viewport.position,
