@@ -81,7 +81,7 @@ class StrokeRenderCacheTest {
         } finally { cache.clear(); target.discardDisplayList() }
     }
 
-    @Test fun panningAndPreviewResizingReuseGroupsAndAppendedTailsUntilZoomChanges() {
+    @Test fun panningZoomingAndPreviewResizingReuseGroupsAndAppendedTails() {
         val ink = ink(); val cache = StrokeRenderCache(); val target = RenderNode("pan-test")
         var entries = (1L..300L).map { it to EditorStroke(ink) }
         var width = 1000
@@ -105,11 +105,14 @@ class StrokeRenderCacheTest {
             draw(ViewPosition(2f, 120f, 900f))
             assertEquals(initial + 2, cache.recordedGroups)
             draw(ViewPosition(3f, 120f, 900f))
-            assertEquals(initial * 2 + 2, cache.recordedGroups)
+            assertEquals(initial + 2, cache.recordedGroups)
+            repeat(60) { draw(ViewPosition(1f + it / 12f, 0f, it * 10f)) }
+            repeat(60) { draw(ViewPosition(6f - it / 12f, 0f, it * 10f)) }
+            assertEquals("Pinching must reuse the vector display lists", initial + 2, cache.recordedGroups)
             for (size in listOf(980, 900, 800, 700, 600, 700, 800, 900, 1000)) {
                 width = size
                 draw(ViewPosition(3f, 120f, 900f))
-                assertEquals("Preview resizing must not record all strokes again", initial * 2 + 2, cache.recordedGroups)
+                assertEquals("Preview resizing must not record all strokes again", initial + 2, cache.recordedGroups)
             }
         } finally { cache.clear(); target.discardDisplayList() }
     }
@@ -169,7 +172,8 @@ class StrokeRenderCacheTest {
             assertEquals(groups + 2, cache.recordedGroups)
             assertTrue(drawn.size <= StrokeRenderCache.GROUP_SIZE)
             drawn.clear(); draw(appended, ViewPosition(2f))
-            assertEquals(appended.map { it.second }, drawn)
+            assertEquals("Zoom reuses unchanged groups; only the restored stroke is recorded",
+                appended.take(StrokeRenderCache.GROUP_SIZE - 1).map { it.second }, drawn)
         } finally { cache.clear(); target.discardDisplayList() }
     }
     @Test fun selectionMovementAndDeselectionInvalidateOnlyAffectedGroups() {

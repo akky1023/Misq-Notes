@@ -15,7 +15,6 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     private data class GroupId(val bucket: Long, val separator: Long = 0L, val star: Boolean = false)
     private val groups = mutableMapOf<GroupId, Group>()
     private var visibleGroups = emptySet<GroupId>()
-    private var viewport: ViewPosition? = null
     internal var recordedGroups = 0
         private set
     internal val pendingCompaction get() = groups.values.any { it.nodes.size > 1 }
@@ -35,11 +34,9 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             entries.forEach { drawStroke(canvas, it.second, selected(it.second)) }
             return
         }
-        // Preview opening/closing changes the editor width every frame. The recorded strokes
-        // are complete (unclipped), so resize their display lists instead of rebuilding all ink.
-        if (viewport?.zoom != position.zoom) {
-            clear(); viewport = position
-        }
+        // Display lists contain vector drawing commands, not a viewport-sized bitmap.
+        // Reuse their complete (unclipped) strokes for pinch zoom as well as pan/resize;
+        // clearing on every zoom step re-records all visible ink on the UI thread.
         // Operation IDs are stable under erase/undo; deleting a stroke never shifts later groups.
         // Stars have individual display lists. Split surrounding normal strokes into stable runs
         // so rebuilding a returning star neither redraws its neighbours nor changes draw order.
