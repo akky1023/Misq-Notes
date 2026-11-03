@@ -288,4 +288,10 @@
     <string name="merge_provisional_version">最新版 (%1$s)</string>
     <string name="conflict_provisional_help">最終更新日時が最も新しい版を仮表示しています。編集の保存またはマージの確定で保存されます。</string>
     <string name="note_provisional">コンフリクト有</string>
+    <string name="operation_processing">処理中</string>
+    <string name="operation_loading_library">ノート一覧を読み込み中</string>
+    <string name="operation_loading_settings">設定を読み込み中</string>
+    <string name="operation_preparing_note">ノートを表示する準備中</string>
+    <string name="operation_syncing">外部保存先へ反映中</string>
+    <string name="operation_changing_storage">保存先を切り替え中</string>
 </resources>

@@ -288,4 +288,10 @@
     <string name="merge_provisional_version">Latest (%1$s)</string>
     <string name="conflict_provisional_help">The most recently updated version is shown provisionally. It is saved when you save an edit or confirm the merge.</string>
     <string name="note_provisional">Conflicts</string>
+    <string name="operation_processing">Processing</string>
+    <string name="operation_loading_library">Loading note list</string>
+    <string name="operation_loading_settings">Loading settings</string>
+    <string name="operation_preparing_note">Preparing note</string>
+    <string name="operation_syncing">Syncing to external storage</string>
+    <string name="operation_changing_storage">Changing storage location</string>
 </resources>

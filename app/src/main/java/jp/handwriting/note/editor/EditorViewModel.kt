@@ -64,6 +64,7 @@ class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageR
 }
 data class WorkspaceUi(
     val current: NoteInfo? = null, val notes: List<NoteSummary> = emptyList(),
+    val workingMessage: Int = R.string.operation_processing,
     val working: Boolean = false, val saving: Boolean = false, val error: String? = null,
     val recovered: Boolean = false,
     val saveFailed: Boolean = false,
@@ -211,12 +212,13 @@ class EditorViewModel : ViewModel() {
         conflictStore = NoteConflicts(File(directory, "notes"), File(directory, "conflicts"),
             remoteContains = { notebookStorage?.contains(it) == true }, ensure = { notebookStorage?.ensure(it) })
         starting = true
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.operation_loading_library)
         viewModelScope.launch {
             try {
                 val needsRemote = withContext(Dispatchers.IO) { notebookStorage?.initialize() == true }
                 if (needsRemote) notebookStorage?.initializeRemote()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
+                workMessage(R.string.operation_loading_settings)
                 repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
                     NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
@@ -266,6 +268,7 @@ class EditorViewModel : ViewModel() {
                     mutableWorkspace.value = mutableWorkspace.value.copy(saving = state.saving, saveFailed = state.error != null,
                         error = if (state.error != null) AppMessages.text(R.string.save_failed, state.error) else mutableWorkspace.value.error?.takeUnless { mutableWorkspace.value.saveFailed })
                 } }
+                workMessage(R.string.operation_loading_library)
                 refreshList()
                 notebookStorage?.startBackground()
             } catch (e: Exception) { fail(e) }
@@ -311,7 +314,7 @@ class EditorViewModel : ViewModel() {
                                 remaining += item
                                 continue
                             }
-                            mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+                            beginWork(clearError = false)
                             val merged = try { withContext(Dispatchers.IO) { repository!!.autoMergeConflict(store, item) } }
                             finally { mutableWorkspace.value = mutableWorkspace.value.copy(working = false) }
                             if (merged == null) remaining += item else changed = true
@@ -337,7 +340,7 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || mutableUi.value.busy || closing || mutableConflicts.value.opening) return
         val store = conflictStore ?: return
         mutableConflicts.value = mutableConflicts.value.copy(opening = true, error = null)
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+        beginWork(R.string.saving, clearError = false)
         viewModelScope.launch {
             try {
                 conflictScan?.join()
@@ -345,11 +348,13 @@ class EditorViewModel : ViewModel() {
                     val generation = enqueueSave(force = true)
                     check(generation == null || saves!!.await(generation)) { AppMessages.text(R.string.wait_note) }
                 }
+                workMessage(R.string.loading_note)
                 val title = AppMessages.text(R.string.conflict_copy_title, conflict.title)
                 val loaded = withContext(Dispatchers.IO) {
                     val manifest = repository!!.copyConflict(store, conflict, title)
                     repository!!.load(manifest.info.id).also { store.markOpened(conflict, manifest.info.id) }
                 }
+                workMessage(R.string.operation_preparing_note)
                 enter(loaded)
                 mutableConflicts.value = mutableConflicts.value.copy(items = mutableConflicts.value.items.filterNot { it.key == conflict.key }, opening = false)
             } catch (e: Exception) {
@@ -471,7 +476,7 @@ class EditorViewModel : ViewModel() {
     internal fun changeStorage(uri: android.net.Uri?) {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
         val storage = notebookStorage ?: return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 librarySaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_library) } }
@@ -479,7 +484,9 @@ class EditorViewModel : ViewModel() {
                 paletteSaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_palette) } }
                 preferenceSaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_pen) } }
                 if (uri != null && !storage.blockedByRemoteChange) check(storage.awaitSync()) { AppMessages.text(R.string.wait_note) }
+                workMessage(R.string.operation_changing_storage)
                 withContext(Dispatchers.IO) { storage.change(uri) }
+                workMessage(R.string.operation_loading_library)
                 if (storage.recovered) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
                 refreshStorageLocation()
                 if (uri == null) {
@@ -510,7 +517,7 @@ class EditorViewModel : ViewModel() {
     }
     fun createNote(title: String, folder: String? = null) {
         if (mutableWorkspace.value.working || repository == null) return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 val manifest = withContext(Dispatchers.IO) { repository!!.create(title.trim().ifEmpty { AppMessages.text(R.string.untitled) }, mutableLibrary.value.value.paper) }
@@ -518,6 +525,7 @@ class EditorViewModel : ViewModel() {
                     updateLibrary(mutableLibrary.value.value.moved(manifest.info.id, folder))
                     librarySaves?.let { check(it.await(it.state.value.latest)) { AppMessages.text(R.string.folder_save_failed) } }
                 }
+                workMessage(R.string.operation_preparing_note)
                 enter(LoadedNote(manifest, emptyList(), false))
             } catch (e: Exception) { fail(e) }
         }
@@ -525,10 +533,14 @@ class EditorViewModel : ViewModel() {
     fun openNote(id: String) {
         if (mutableWorkspace.value.working || repository == null) return
         stopBackgroundLoading(); regionJob?.cancel()
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.loading_note)
         viewModelScope.launch {
-            try { enter(withContext(Dispatchers.IO) { notebookStorage?.keepOpen(id); repository!!.loadVisible(id,
-                if (viewport.width > 1f) viewport.height / viewport.width else initialAspect) }) }
+            try {
+                val loaded = withContext(Dispatchers.IO) { notebookStorage?.keepOpen(id); repository!!.loadVisible(id,
+                    if (viewport.width > 1f) viewport.height / viewport.width else initialAspect) }
+                workMessage(R.string.operation_preparing_note)
+                enter(loaded)
+            }
             catch (e: Exception) { fail(e) }
         }
     }
@@ -561,7 +573,7 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working) return
         closing = true
         stopBackgroundLoading()
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+        beginWork(R.string.saving, clearError = false)
         viewModelScope.launch {
             try {
                 check(!mutableUi.value.busy) { AppMessages.text(R.string.wait_stroke_back) }
@@ -575,7 +587,9 @@ class EditorViewModel : ViewModel() {
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 previewSaves?.flush()
+                workMessage(R.string.operation_syncing)
                 check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) {
                     notebookStorage?.keepOpen(null)
                     repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() }
@@ -594,15 +608,25 @@ class EditorViewModel : ViewModel() {
     fun deleteNote(id: String) = listAction { repository!!.delete(id) }
     private fun listAction(action: () -> Unit) {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { action() }
+                workMessage(R.string.operation_syncing)
                 check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 refreshList()
             } catch (e: Exception) { fail(e) }
         }
+    }
+    private fun beginWork(message: Int = R.string.operation_processing, clearError: Boolean = true) {
+        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = if (clearError) null else mutableWorkspace.value.error,
+            workingMessage = message)
+    }
+    private fun workMessage(message: Int) {
+        mutableWorkspace.value = mutableWorkspace.value.copy(
+            workingMessage = message)
     }
     private fun fail(e: Exception) { mutableWorkspace.value = mutableWorkspace.value.copy(working = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed)) }
     fun clearError() { mutableWorkspace.value = mutableWorkspace.value.copy(error = null, recovered = false) }
@@ -616,7 +640,7 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.current != null) retrySave()
         else if (repository == null) storageDirectory?.let(::start)
         else {
-            mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+            beginWork()
             viewModelScope.launch { try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; refreshList() } catch (e: Exception) { fail(e) } }
         }
     }
