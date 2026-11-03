@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.lifecycle.viewModelScope
 import jp.handwriting.note.AppMessages
 import java.io.File
 import java.util.UUID
@@ -44,7 +45,8 @@ class ExternalStorageIntegrationTest {
             assertTrue(withTimeout(30000) { storage.awaitSync() })
             test(directory, tree, scope, storage, manifests)
         } finally {
-            scope.cancel(); failWrites(false)
+            callProvider("test-hold-writes", Bundle().apply { putBoolean("hold", false) })
+            scope.coroutineContext[Job]!!.cancelAndJoin(); failWrites(false)
             callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", false) })
             DocumentsContract.deleteDocument(context.contentResolver,
                 DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)))
@@ -54,6 +56,81 @@ class ExternalStorageIntegrationTest {
         }
     }
     private fun bodies(directory: File) = File(directory, "notes").listFiles().orEmpty().filter { it.extension == "misq" }
+    private suspend fun clearModel(store: androidx.lifecycle.ViewModelStore, model: jp.handwriting.note.editor.EditorViewModel) {
+        val job = model.viewModelScope.coroutineContext[Job]!!
+        withContext(Dispatchers.Main) { store.clear() }
+        // Closing a note no longer waits for uploads; stop all IO before deleting the test tree.
+        job.join()
+    }
+    @Test fun editorAndLibraryRemainUsableDuringExternalUploadAndFailure() = runBlocking {
+        fixture { directory, _, scope, _, manifests ->
+            val store = androidx.lifecycle.ViewModelStore()
+            val model = withContext(Dispatchers.Main) {
+                androidx.lifecycle.ViewModelProvider(store, androidx.lifecycle.ViewModelProvider.NewInstanceFactory())[
+                    jp.handwriting.note.editor.EditorViewModel::class.java].also {
+                    it.configureStorage(context, directory, File(directory, "ui-cache")); it.start(directory)
+                }
+            }
+            suspend fun waitUntil(test: () -> Boolean) = withTimeout(15000) { while (!test()) delay(10) }
+            val id = manifests.first().info.id
+            suspend fun open() {
+                withContext(Dispatchers.Main) { model.openNote(id) }
+                waitUntil { model.workspace.value.current?.id == id && !model.workspace.value.working && !model.ui.value.busy }
+            }
+            suspend fun close() {
+                withContext(Dispatchers.Main) { model.closeNote() }
+                waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+            }
+            try {
+                waitUntil { !model.workspace.value.working }
+                open()
+                callProvider("test-hold-writes", Bundle().apply { putBoolean("hold", true) })
+                withContext(Dispatchers.Main) { model.edits.addAll(listOf(placedStroke(1, 100f).value)) }
+                waitUntil { callProvider("test-write-waiting")!!.getBoolean("waiting") }
+                close()
+                assertTrue(model.workspace.value.syncing)
+                assertTrue(File(directory, ".notes-pending").exists())
+                assertTrue(File(directory, "notes/$id.misq").exists())
+                // Editing the same note again must survive acknowledgement of the older upload.
+                open()
+                withContext(Dispatchers.Main) { model.edits.addAll(listOf(placedStroke(2, 200f).value)) }
+                close()
+                withContext(Dispatchers.Main) { model.renameNote(id, "renamed during upload") }
+                waitUntil { !model.workspace.value.working }
+                assertEquals("renamed during upload", model.workspace.value.notes.first { it.id == id }.title)
+                withContext(Dispatchers.Main) { model.deleteNote(manifests[1].info.id) }
+                waitUntil { !model.workspace.value.working }
+                assertEquals(listOf(id), model.workspace.value.notes.map { it.id })
+                assertTrue(callProvider("test-write-waiting")!!.getBoolean("waiting"))
+                callProvider("test-hold-writes", Bundle().apply { putBoolean("hold", false) })
+                waitUntil { !model.workspace.value.syncing && !File(directory, ".notes-pending").exists() }
+                assertTrue("Published closed notes should release their working bodies", bodies(directory).isEmpty())
+
+                open()
+                assertEquals(2, model.ui.value.strokes)
+                failWrites(true)
+                withContext(Dispatchers.Main) { model.edits.addAll(listOf(placedStroke(3, 300f).value)) }
+                close()
+                waitUntil { model.workspace.value.syncError != null }
+                assertTrue(File(directory, ".notes-pending").exists())
+                assertEquals(3, NoteFiles(File(directory, "notes")).read(id).manifest.strokes.size)
+                failWrites(false)
+                withContext(Dispatchers.Main) { model.retry() }
+                waitUntil { !model.workspace.value.working && !model.workspace.value.syncing &&
+                    model.workspace.value.syncError == null && !File(directory, ".notes-pending").exists() }
+                assertTrue(bodies(directory).isEmpty())
+                val restarted = NotebookStorage(context, directory, scope)
+                assertTrue(restarted.initialize()); restarted.initializeRemote()
+                val saved = restarted.noteFiles().read(id).manifest
+                assertEquals("renamed during upload", saved.info.title)
+                assertEquals(3, saved.strokes.size)
+                assertEquals(listOf(id), restarted.noteFiles().list().map { it.id })
+            } finally {
+                callProvider("test-hold-writes", Bundle().apply { putBoolean("hold", false) })
+                clearModel(store, model)
+            }
+        }
+    }
     @Test fun dirtyBandsSurviveFailureAndUnchangedBodyIsNotCopiedForSettingsSave() = runBlocking {
         fixture { directory, tree, _, storage, manifests ->
             val note = manifests.first(); val id = note.info.id; val files = storage.noteFiles()
@@ -176,7 +253,7 @@ class ExternalStorageIntegrationTest {
                 assertEquals(4, model.ui.value.strokes)
                 withContext(Dispatchers.Main) { model.closeNote() }
                 waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
-            } finally { withContext(Dispatchers.Main) { store.clear() } }
+            } finally { clearModel(store, model) }
         }
     }
     @Test fun partialEditIsJournaledBeforeDownloadAndRecoveredAfterReadFailure() = runBlocking {
@@ -238,6 +315,8 @@ class ExternalStorageIntegrationTest {
                     model.edits.redo(); model.closeNote()
                 }
                 waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
+                // This assertion exercises a published spatial cache; close now returns earlier.
+                waitUntil { !model.workspace.value.syncing && !File(directory, ".notes-pending").exists() && bodies(directory).isEmpty() }
                 firstFrame.set(null)
                 withContext(Dispatchers.Main) { model.openNote(original.info.id) }
                 waitUntil { firstFrame.get() != null }
@@ -257,7 +336,7 @@ class ExternalStorageIntegrationTest {
                 delay(300)
                 assertTrue(model.edits.snapshot().isEmpty())
                 assertFalse(model.ui.value.loadingRest)
-            } finally { withContext(Dispatchers.Main) { store.clear() } }
+            } finally { clearModel(store, model) }
         }
     }
     @Test fun largeNoteEditUploadsOnlyChangedBlocksAndAliasesRemainReadable() = runBlocking {

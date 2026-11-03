@@ -33,9 +33,11 @@ internal class NotebookStorage(private val context: Context, private val directo
     private val externalMode = MutableStateFlow(false)
     private val connectionState = MutableStateFlow(SaveState())
     var beforeExternalSave: suspend () -> Unit = {}
+    var afterExternalSave: suspend () -> Unit = {}
     private val queue = SaveQueue(scope, batchMillis = 750L) { _: Unit ->
         beforeExternalSave()
         withContext(Dispatchers.IO) { saveExternal() }
+        afterExternalSave()
     }
     val syncState = combine(legacy.syncState, queue.state, connectionState, externalMode) { old, save, connect, external ->
         if (!external) old else save.copy(saving = save.saving || connect.saving,

@@ -265,6 +265,14 @@ class EditorViewModel : ViewModel() {
                     repository!!.updatePreview(snapshot)
                 } }
                 notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
+                notebookStorage?.afterExternalSave = {
+                    // Serialize eviction with repository reads, after provider IO has finished.
+                    // Cleanup failure must not turn a successful external save into a failed one.
+                    withContext(Dispatchers.IO) {
+                        runCatching { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
+                            .onFailure { android.util.Log.w("MisqStorage", "Saved working copies could not be released", it) }
+                    }
+                }
                 saves = SaveQueue(viewModelScope, batchMillis = 500) { request -> withContext(Dispatchers.IO) {
                     val refs = (request.baseRefs.filter { it.id !in request.hydrated } +
                         request.entries.map { StrokeRef(it.id, it.value.storageId) }).sortedBy { it.id }
@@ -602,8 +610,7 @@ class EditorViewModel : ViewModel() {
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 previewSaves?.flush()
-                workMessage(R.string.operation_syncing)
-                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                // Local queues are durable now; external publication continues independently.
                 workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) {
                     notebookStorage?.keepOpen(null)
@@ -627,8 +634,6 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { action() }
-                workMessage(R.string.operation_syncing)
-                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
                 workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 refreshList()
