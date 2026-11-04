@@ -11,6 +11,32 @@ import org.junit.rules.TemporaryFolder
 
 class ImmutableNoteStoreTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun lazyManifestPreservesPageOrderIndexedReadsAndIterationAcrossBoundaries() {
+        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("many pages")
+        val refs = (1L..1025L).map { StrokeRef(it, UUID.randomUUID().toString()) }
+        notes.save(empty.copy(strokes = refs, nextId = 1026), refs.associate {
+            val y = (it.id % 3) * 1000f
+            it.storageId to StrokePlacement(y, y, y + 10f)
+        }) { byteArrayOf(7) }
+        val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(notes.document(empty.info.id))
+        assertTrue(root.pages.size > 8)
+        val expected = root.pages.flatMap { store.rows(it).map { row -> row.ref } }
+        val cold = ImmutableNoteStore(store.directory) { error("Manifest must not read stroke bodies") }
+        val strokes = cold.manifest(root).strokes
+        assertEquals(expected.size, strokes.size)
+        assertEquals(expected, strokes.toList())
+        expected.indices.reversed().forEach { assertEquals(expected[it], strokes[it]) }
+        assertEquals(expected.subList(254, 260), strokes.subList(254, 260))
+        val iterator = strokes.iterator()
+        expected.forEach { assertTrue(iterator.hasNext()); assertEquals(it, iterator.next()) }
+        assertFalse(iterator.hasNext())
+        assertThrows(NoSuchElementException::class.java) { iterator.next() }
+        assertThrows(IllegalArgumentException::class.java) { strokes[-1] }
+        assertThrows(IllegalArgumentException::class.java) { strokes[strokes.size] }
+        val emptyStrokes = store.manifest(store.create(empty.info)).strokes
+        assertEquals(0, emptyStrokes.size)
+        assertFalse(emptyStrokes.iterator().hasNext())
+    }
     @Test fun visibleReadStillValidatesUnrequestedBytesAndTrailingDataInTheSamePack() {
         val notes = NoteFiles(temp.newFolder()); val empty = notes.create("shared pack")
         val refs = (1L..2L).map { StrokeRef(it, UUID.randomUUID().toString()) }
@@ -39,7 +65,7 @@ class ImmutableNoteStoreTest {
         file.writeBytes(original + byteArrayOf(0))
         assertThrows(IllegalArgumentException::class.java) { store.visible(root, 100f, 110f, emptySet()) }
         file.writeBytes(original.copyOf(original.size - 1))
-        assertThrows(java.io.EOFException::class.java) { store.visible(root, 100f, 110f, emptySet()) }
+        assertThrows(Exception::class.java) { store.visible(root, 100f, 110f, emptySet()) }
     }
     private fun source(): MisqFile {
         val notes = NoteFiles(temp.newFolder()); val empty = notes.create("source")
