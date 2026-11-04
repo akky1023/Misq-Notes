@@ -187,13 +187,22 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
         rows.sortedBy { it.id }.forEach { row -> array.put(JSONObject().put("id", row.id).put("entity", row.entity).put("heads", JSONArray(row.heads)).put("order", row.order)) }
     }))
     fun manifest(root: Root): NoteManifest = NoteManifest(root.info, object : AbstractList<StrokeRef>() {
-        override val size = root.count
+        // Keep the manifest lazy, but locate indexed reads without scanning every preceding page.
+        private val ends = IntArray(root.pages.size).also { ends ->
+            var total = 0
+            root.pages.forEachIndexed { index, page -> total += page.count; ends[index] = total }
+        }
+        override val size = if (root.deleted) 0 else ends.lastOrNull() ?: 0
         override fun get(index: Int): StrokeRef {
             require(index in 0 until size)
-            var offset = index
-            root.pages.forEach { page -> if (offset < page.count) return rows(page)[offset].ref else offset -= page.count }
-            error("Invalid format 3 index")
+            val match = ends.binarySearch(index + 1)
+            val page = if (match >= 0) match else -match - 1
+            val start = if (page == 0) 0 else ends[page - 1]
+            return rows(root.pages[page])[index - start].ref
         }
+        // Sequential consumers load each page once instead of doing an indexed lookup per stroke.
+        override fun iterator(): Iterator<StrokeRef> = (if (root.deleted) emptyList() else root.pages).asSequence()
+            .flatMap { page -> rows(page).asSequence().map { it.ref } }.iterator()
     }, root.nextId)
     fun visible(root: Root, top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit = {}, onePage: Boolean = false): List<Pair<StrokeRef, ByteArray>> {
         if (root.deleted) return emptyList()
@@ -239,7 +248,8 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
         wanted.entries.groupBy { it.value.objectId }.forEach { (objectId, members) ->
             val requested = members.associate { it.key to it.value }; val seen = mutableSetOf<String>()
             val digest = java.security.MessageDigest.getInstance("SHA-256")
-            java.security.DigestInputStream(openObject(objectId, checkpoint), digest).use { stream -> DataInputStream(stream).use { input ->
+            // Buffer below the digest so every consumed byte is still verified, including skipped bodies.
+            java.security.DigestInputStream(openObject(objectId, checkpoint).buffered(), digest).use { stream -> DataInputStream(stream).use { input ->
                 require(input.readInt() == PACK_MAGIC)
                 val count = input.readInt(); require(count in 1..1_000_000)
                 val buffer = ByteArray(8192)

@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class StrokeIndexTest {
+    @Test fun queriesMatchFullScanAfterRandomReplacementsAndRemovals() {
+        val random = kotlin.random.Random(814)
+        val index = StrokeIndex<Int>()
+        val expected = mutableMapOf<Long, StrokeIndex.Bounds>()
+        repeat(1000) { step ->
+            val id = random.nextLong(-200, 200)
+            if (step % 5 == 0) { index.remove(id); expected.remove(id) }
+            else {
+                val x = random.nextInt(-2000, 2000).toFloat()
+                val y = random.nextInt(-100000, 100000).toFloat()
+                val bounds = StrokeIndex.Bounds(x, y, x + 100f, y + if (step % 7 == 0) 100000f else 800f)
+                index.add(id, id.toInt(), bounds); expected[id] = bounds
+            }
+            val top = random.nextInt(-100000, 100000).toFloat()
+            val rect = StrokeIndex.Bounds(-500f, top, 500f, top + if (step % 11 == 0) 1000000f else 3000f)
+            val matches = expected.filterValues { b ->
+                b.left <= rect.right && b.right >= rect.left && b.top <= rect.bottom && b.bottom >= rect.top
+            }.keys.sorted().map { it to it.toInt() }
+            assertEquals(matches, index.query(rect))
+        }
+    }
     @Test fun scrollExtentTracksTheLastStrokeAcrossRemovalReplacementAndEmptyNotes() {
         val index = StrokeIndex<String>()
         assertEquals(0f, index.bottom, 0f)
