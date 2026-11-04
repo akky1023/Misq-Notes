@@ -6,9 +6,11 @@ import android.os.*
 import android.view.Choreographer
 import android.view.FrameMetrics
 import android.view.MotionEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
+import androidx.activity.compose.setContent
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
@@ -18,6 +20,9 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.PerformanceActivity
+import jp.handwriting.note.NotebookApp
+import jp.handwriting.note.NotebookTheme
+import jp.handwriting.note.R
 import jp.handwriting.note.editor.*
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -34,6 +39,7 @@ class RealNoteFrameTest {
         val draw = mutableListOf<Long>()
         val gpu = mutableListOf<Long>()
         val command = mutableListOf<Long>()
+        val intended = mutableListOf<Long>()
         val intervals = mutableListOf<Long>()
         var dropped = 0
     }
@@ -45,6 +51,7 @@ class RealNoteFrameTest {
         report("FRAMES $name total ${stats(samples.total)} droppedMetrics=${samples.dropped}")
         report("FRAMES $name draw ${stats(samples.draw)}")
         report("FRAMES $name gpu ${stats(samples.gpu)} command ${stats(samples.command)}")
+        report("FRAMES $name uniqueVsync=${samples.intended.toSet().size} reported=${samples.intended.size}")
         report("FRAMES $name vsync ${stats(samples.intervals)} missed60=${samples.intervals.count { it > 25_000_000L }}")
     }
 
@@ -84,6 +91,12 @@ class RealNoteFrameTest {
             }
             ready()
             val active = AtomicReference<Samples?>(null)
+            fun gfx(name: String) {
+                val descriptor = instrumentation.uiAutomation.executeShellCommand("dumpsys gfxinfo net.neomenia.misqnotes.probe framestats")
+                val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
+                File(context.cacheDir, "frame-gfx-$name.txt").writeText(text)
+                report("GFX $name " + text.lineSequence().filter { it.contains("Janky frames") || it.contains("percentile:") || it.contains("Total frames rendered") }.joinToString(" | ") { it.trim() })
+            }
             ActivityScenario.launch(PerformanceActivity::class.java).use { scenario ->
                 lateinit var canvas: InkCanvasView
                 scenario.onActivity { activity ->
@@ -94,14 +107,34 @@ class RealNoteFrameTest {
                             samples.draw += metrics.getMetric(FrameMetrics.DRAW_DURATION)
                             samples.gpu += metrics.getMetric(FrameMetrics.GPU_DURATION)
                             samples.command += metrics.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION)
+                            samples.intended += metrics.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
                             samples.dropped += dropped
                         } }
                     }, Handler(thread.looper))
-                    canvas = InkCanvasView(activity, editor)
-                    activity.setContentView(canvas)
+                    if (args.getString("fullEditor") == "true") {
+                        activity.setContent {
+                            NotebookTheme(AppThemeMode.SYSTEM) {
+                                NotebookApp(editor, onCanvas = { canvas = it }, onCanvasDisposed = {}, onNotes = {})
+                            }
+                        }
+                    } else {
+                        canvas = InkCanvasView(activity, editor)
+                        activity.setContentView(canvas)
+                    }
                     editor.openNote(note!!)
                 }
                 ready(); delay(600)
+                if (args.getString("preview") == "true") {
+                    fun find(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
+                        if (node == null) return null
+                        if (node.contentDescription?.toString() == AppMessages.text(R.string.note_preview)) return node
+                        for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                        return null
+                    }
+                    val handle = checkNotNull(find(instrumentation.uiAutomation.rootInActiveWindow)) { "Preview handle missing" }
+                    check(handle.performAction(AccessibilityNodeInfo.ACTION_CLICK))
+                    delay(1000); ready()
+                }
                 val height = withContext(Dispatchers.Main) { editor.viewport.height / editor.viewport.scale }
                 // Read the complete travel area before timing drawing; no blank unread regions.
                 for (screen in 0..4) {
@@ -121,6 +154,7 @@ class RealNoteFrameTest {
                 }
                 suspend fun frames(count: Int, samples: Samples, action: (Int) -> Unit) {
                     val done = CountDownLatch(1); val failure = AtomicReference<Throwable?>(null)
+                    val started = System.nanoTime()
                     withContext(Dispatchers.Main) {
                         var frame = 0; var previous = 0L
                         val callback = object : Choreographer.FrameCallback {
@@ -137,8 +171,11 @@ class RealNoteFrameTest {
                     }
                     assertTrue("Frame loop stalled", withContext(Dispatchers.IO) { done.await(45, TimeUnit.SECONDS) })
                     failure.get()?.let { throw it }
+                    report("FRAME_LOOP frames=$count elapsedMs=${(System.nanoTime() - started) / 1e6}")
                 }
                 for (pass in 0..1) {
+                    if (pass == 0 && args.getString("profile") == "true")
+                        Debug.startMethodTracingSampling(File(context.cacheDir, "frame-scroll").path, 32 * 1024 * 1024, 1000)
                     val samples = Samples(); active.set(samples)
                     for (direction in listOf(1, -1)) {
                         repeat(3) {
@@ -155,6 +192,8 @@ class RealNoteFrameTest {
                     }
                     delay(100); active.set(null)
                     report("pan-pass-$pass", samples)
+                    gfx("pan-$pass")
+                    if (pass == 0 && args.getString("profile") == "true") Debug.stopMethodTracing()
                 }
                 val samples = Samples(); active.set(samples)
                 withContext(Dispatchers.Main) { editor.viewportGestureActive = true }
@@ -166,6 +205,7 @@ class RealNoteFrameTest {
                 }
                 withContext(Dispatchers.Main) { editor.viewportGestureActive = false; editor.viewportChanged() }
                 delay(100); active.set(null); report("pinch", samples)
+                gfx("pinch")
             }
             assertEquals(sourceHash, NotebookArchive.digest(source))
             report("FRAME_SOURCE_COPY unchanged=true")
