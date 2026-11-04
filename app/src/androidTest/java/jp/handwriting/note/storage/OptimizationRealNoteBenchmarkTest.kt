@@ -67,12 +67,21 @@ class OptimizationRealNoteBenchmarkTest {
                 assertEquals(expected.map { it.ref.storageId }, result.map { it.storageId })
             }
             val index = StrokeIndex<Long>()
-            rows.forEach { row -> index.add(row.ref.id, row.ref.id, StrokeIndex.Bounds(0f, row.placement.top, 1000f, row.placement.bottom)) }
+            val original = MisqFile(source, readOnlyAlias = true)
+            // Decode outside the timer and retain only bounds, not all Ink shapes at once.
+            val bounds = rows.mapNotNull { row ->
+                val stroke = NoteRepository.decodeStroke(row.ref.storageId, original.stroke(row.ref.storageId))
+                val box = stroke.bounds ?: return@mapNotNull null
+                row.ref.id to StrokeIndex.Bounds(box.xMin, box.yMin, box.xMax, box.yMax)
+            }.toMap()
+            bounds.forEach { (id, box) -> index.add(id, id, box) }
             val regions = List(500) { i ->
                 val y = i * root.bottom / 500f
                 StrokeIndex.Bounds(0f, y, 1000f, y + 2000f)
             }
-            val matches = regions.map { rect -> rows.filter { it.placement.bottom >= rect.top && it.placement.top <= rect.bottom }.map { it.ref.id }.sorted() }
+            val matches = regions.map { rect -> bounds.filterValues { box ->
+                box.left <= rect.right && box.right >= rect.left && box.bottom >= rect.top && box.top <= rect.bottom
+            }.keys.sorted() }
             measure("real-viewport-500queries") {
                 regions.forEachIndexed { i, rect -> assertEquals(matches[i], index.query(rect).map { it.first }) }
             }
