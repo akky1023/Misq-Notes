@@ -28,25 +28,25 @@ class OptimizationDeviceBenchmarkTest {
         check(context.packageName == "net.neomenia.misqnotes.probe")
         val directory = File(context.cacheDir, "optimization-${UUID.randomUUID()}").also { check(it.mkdirs()) }
         try {
-        val files = NoteFiles(File(directory, "notes"))
-        val empty = files.create("synthetic benchmark")
-        val refs = (1L..4096L).map { StrokeRef(it, UUID.randomUUID().toString()) }
-        val placements = refs.associate { it.storageId to StrokePlacement(0f, 0f, 20f) }
-        val body = ByteArray(128) { it.toByte() }
-        files.save(empty.copy(strokes = refs, nextId = 4097), placements) { body }
-        val store = ImmutableNoteStore(File(directory, "store"))
-        val root = store.importNote(files.document(empty.info.id))
-        measure("visible-4096") {
-            val result = store.visible(root, 0f, 100f, emptySet())
-            assertEquals(refs, result.map { it.first })
-            assertTrue(result.all { it.second.contentEquals(body) })
-        }
-        val expected = root.pages.flatMap { store.rows(it).map { row -> row.ref } }
-        measure("manifest-4096") {
-            val strokes = store.manifest(root).strokes
-            assertEquals(expected, strokes.toList())
-            assertEquals(expected.last(), strokes.last())
-        }
+            val files = NoteFiles(File(directory, "notes"))
+            val empty = files.create("synthetic benchmark")
+            val refs = (1L..4096L).map { StrokeRef(it, UUID.randomUUID().toString()) }
+            val placements = refs.associate { it.storageId to StrokePlacement(0f, 0f, 20f) }
+            val body = ByteArray(128) { it.toByte() }
+            files.save(empty.copy(strokes = refs, nextId = 4097), placements) { body }
+            val store = ImmutableNoteStore(File(directory, "store"))
+            val root = store.importNote(files.document(empty.info.id))
+            measure("visible-4096") {
+                val result = store.visible(root, 0f, 100f, emptySet())
+                assertEquals(refs, result.map { it.first })
+                assertTrue(result.all { it.second.contentEquals(body) })
+            }
+            val expected = root.pages.flatMap { store.rows(it).map { row -> row.ref } }
+            measure("manifest-4096") {
+                val strokes = store.manifest(root).strokes
+                assertEquals(expected, strokes.toList())
+                assertEquals(expected.last(), strokes.last())
+            }
         } finally { directory.deleteRecursively() }
     }
 
