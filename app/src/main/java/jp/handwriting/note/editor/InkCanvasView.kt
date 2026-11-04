@@ -143,8 +143,16 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
 
     private fun updateRetention(visible: List<Pair<Long, EditorStroke>>) {
         val mode = model.library.value.value.strokeCache
+        val position = model.viewport.position
+        // A nearby snapshot spans three screens. Reuse it within a quarter-screen
+        // vertical cell: every visible stroke is still inside that retained range.
+        // Zoom, horizontal movement, edits and resizing continue to invalidate immediately.
+        val retainedPosition = if (mode == StrokeCacheMode.NEARBY) {
+            val step = ((model.viewport.bottom - position.top) / 4f).coerceAtLeast(.001f)
+            position.copy(top = (kotlin.math.floor(position.top.toDouble() / step) * step).toFloat())
+        } else position
         val key = RetentionState(model.canvasRevision,
-            if (mode == StrokeCacheMode.ALL) ViewPosition() else model.viewport.position,
+            if (mode == StrokeCacheMode.ALL) ViewPosition() else retainedPosition,
             width, height, mode, model.selectionOffset)
         if (key == retentionState) return
         retentionState = key
