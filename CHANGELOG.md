@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.5.0](https://github.com/akky1023/Misq-Notes/compare/v0.4.0...v0.5.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* 保存形式を変更
+
+### 機能追加
+
+* 保存形式を変更 ([9ace591](https://github.com/akky1023/Misq-Notes/commit/9ace5911fc66e6972984ce83691e752e87fb3a9c))
+
+
+### 修正
+
+* いらない保存処理をカット ([0cca87f](https://github.com/akky1023/Misq-Notes/commit/0cca87f30b44aebcbf10b46cc8eb6b66be9f637f))
+* インデックスの自動整理を追加 ([ad089da](https://github.com/akky1023/Misq-Notes/commit/ad089da253862e78a471abe22b08d63a4ef68b71))
+* スクロール・ピンチできない問題がでてきたので修正 ([0d6b655](https://github.com/akky1023/Misq-Notes/commit/0d6b655df22e68147043d6b8594e2d0f6420b98a))
+* できるだけ読み込み時間を短くする工夫 ([de4f1cb](https://github.com/akky1023/Misq-Notes/commit/de4f1cb430dfaa2bf7ba4c0962a7c6c04abbb43b))
+* パフォーマンスを大幅に改善 ([ec22682](https://github.com/akky1023/Misq-Notes/commit/ec22682e0ec501da9a880d45bf79f0b93b0e23f3))
+* プレビュの動作を改善 ([b60acb5](https://github.com/akky1023/Misq-Notes/commit/b60acb57343abb5befb3248dbb7ece5f691a4eff))
+* 保存・読み込み処理を高速化 ([4c5de9c](https://github.com/akky1023/Misq-Notes/commit/4c5de9cfc167fddfd2e281650b3b14d71c30b11a))
+* 削除・マージできない問題 ([4add5f5](https://github.com/akky1023/Misq-Notes/commit/4add5f5f18f503312bc443de2eddca8fee52472a))
+* 外部保存で待たされる問題を修正 ([48d0205](https://github.com/akky1023/Misq-Notes/commit/48d02056058b1df7781aa04a79aa44b7fd8be88a))
+* 拡大縮小がもうちょっとスムーズになるかも ([f8c557f](https://github.com/akky1023/Misq-Notes/commit/f8c557fde9d86cced80f215021f11e1c6dd66124))
+* 現在処理をスピナーの下に書くようにした ([e2baad6](https://github.com/akky1023/Misq-Notes/commit/e2baad662b959e064582b6ed647100066e6bc7ea))
+* 筆跡端に小さなコブがつく問題を修正 ([32e64ae](https://github.com/akky1023/Misq-Notes/commit/32e64ae2f18cc5a8947c386ad7537fbd7511638b))
+
+
+### 性能改善
+
+* スクロール先の輪郭を継続して先読み ([8a3a61a](https://github.com/akky1023/Misq-Notes/commit/8a3a61ac1e836b25de5c5ee61bd6e75addc29f01))
+* 内容不変時のプレビュー再生成を省略 ([02765e7](https://github.com/akky1023/Misq-Notes/commit/02765e7948e36d7081177ad6a4174a8b8d33974b))
+* 周辺キャッシュの再集計を間引く ([d201720](https://github.com/akky1023/Misq-Notes/commit/d201720d1eaa90a1d95982c3eba8c232fa2ef703))
+* 画面端の筆跡の描画結果を再利用 ([dabd2d4](https://github.com/akky1023/Misq-Notes/commit/dabd2d47529bfc7f5a391ecc5bbe7889e806dac1))
+* 筆跡パックの読み取りをバッファ化 ([bdf813a](https://github.com/akky1023/Misq-Notes/commit/bdf813a3cacecd3f7bf9279b924642c0af74ebd5))
+* 筆跡一覧のページ探索を削減 ([f17c5e9](https://github.com/akky1023/Misq-Notes/commit/f17c5e92d59e9273a810b781b9afd7f73aedb081))
+* 表示候補検索の重複処理を削減 ([2408321](https://github.com/akky1023/Misq-Notes/commit/240832189291fd8329e0522f3171bc57c5449d3b))
+* 表示用の輪郭生成をまとめて再利用 ([b621ba8](https://github.com/akky1023/Misq-Notes/commit/b621ba84e4109eda4e3a83420979feec0e410f1f))
+
 ## [0.4.0](https://github.com/akky1023/Misq-Notes/compare/v0.3.1...v0.4.0) (2026-11-02)
 
 
