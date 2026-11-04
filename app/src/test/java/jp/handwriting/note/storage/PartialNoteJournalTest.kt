@@ -36,4 +36,22 @@ class PartialNoteJournalTest {
         PartialNoteJournal.recover(notes.directory, notes, deleted = { true }) { error("deleted note must not be fetched") }
         assertFalse(PartialNoteJournal.exists(notes.directory, empty.info.id))
     }
+    @Test fun journalIsReadableBeforeDownloadingAndRetainsDeletionAndOrdering() {
+        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("pending")
+        val missing = StrokeRef(3, UUID.randomUUID().toString())
+        val changed = StrokeRef(7, UUID.randomUUID().toString())
+        val snapshot = empty.copy(strokes = listOf(missing, changed), nextId = 10)
+        assertTrue(notes.document(empty.info.id).file.delete())
+        PartialNoteJournal.write(notes.directory, snapshot, mapOf(changed.storageId to StrokePlacement(100f, 100f, 110f))) { byteArrayOf(9) }
+        assertEquals(snapshot, notes.read(empty.info.id).manifest)
+        assertArrayEquals(byteArrayOf(9), notes.stroke(empty.info.id, changed.storageId))
+        assertEquals(2, notes.list().single().strokes)
+        val capture = PartialNoteJournal.read(notes.directory, empty.info.id)!!
+        assertFalse(capture.contains(missing.storageId))
+        assertEquals(listOf(9.toByte()), notes.readStrokes(empty.info.id, listOf(changed)) { _, bytes -> bytes.single() })
+        assertFalse(notes.document(empty.info.id).file.exists())
+        PartialNoteJournal.write(notes.directory, snapshot.copy(strokes = listOf(missing)), emptyMap()) { error("no new body") }
+        assertNotEquals(capture.token, PartialNoteJournal.read(notes.directory, empty.info.id)!!.token)
+        assertEquals(listOf(missing), notes.read(empty.info.id).manifest.strokes)
+    }
 }

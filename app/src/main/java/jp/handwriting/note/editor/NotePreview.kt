@@ -105,7 +105,7 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
         Box(modifier) {
             NotePreview(document, visibleRegion, ui.busy || workspace.working, Modifier.fillMaxSize(), onRight, renderContent,
                 onMove = model::moveViewportFromPreview, onMoveEnd = model::viewportChanged)
-            if (renderContent && ui.loadingRest) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            if (renderContent && ui.partialContent) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
         }
     }
 }

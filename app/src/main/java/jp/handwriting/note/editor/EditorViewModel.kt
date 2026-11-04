@@ -39,6 +39,7 @@ data class EditorUi(
     val contentRevision: Long = 0,
     val loadingRegion: Boolean = false,
     val loadingRest: Boolean = false,
+    val partialContent: Boolean = false,
 )
 class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageRecord?, val storageId: String) {
     constructor(ink: Stroke, storageId: String = UUID.randomUUID().toString()) : this(ink, null, storageId)
@@ -137,10 +138,12 @@ class EditorViewModel : ViewModel() {
     private var lazyBottom = 0f
     private val hydrated = mutableSetOf<Long>()
     private var regionJob: kotlinx.coroutines.Job? = null
+    private var regionRun = 0L
     private var backgroundLoadJob: kotlinx.coroutines.Job? = null
     private var backgroundRun = 0L
     private var backgroundLoading = false
     private var regionLoading = false
+    private var regionFailed = false
     private var regionTop = Float.NaN
     private var regionBottom = Float.NaN
     private var hydratingAll = false
@@ -566,11 +569,12 @@ class EditorViewModel : ViewModel() {
     }
     private fun enter(note: LoadedNote, position: ViewPosition? = null) {
         stopBackgroundLoading()
+        regionRun++
         regionJob?.cancel()
         lazyBase = note.manifest.takeIf { note.partial }
         lazyBottom = note.contentBottom
         hydrated.clear(); hydrated.addAll(note.entries.map { it.id })
-        hydratingAll = false; regionLoading = false; regionTop = Float.NaN; regionBottom = Float.NaN
+        hydratingAll = false; regionLoading = false; regionFailed = false; regionTop = Float.NaN; regionBottom = Float.NaN
         notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
@@ -595,10 +599,12 @@ class EditorViewModel : ViewModel() {
         saveViewportPosition()
         closing = true
         stopBackgroundLoading()
+        regionJob?.cancel()
         beginWork(R.string.saving, clearError = false)
         viewModelScope.launch {
             try {
-                check(!mutableUi.value.busy) { AppMessages.text(R.string.wait_stroke_back) }
+                regionJob?.join()
+                check(!edits.busy && !selectionWorking && !selectionGesture) { AppMessages.text(R.string.wait_stroke_back) }
                 val generation = enqueueSave(force = true, allowClosing = true)
                 if (generation != null && !saves!!.flush(generation)) {
                     mutableWorkspace.value = mutableWorkspace.value.copy(working = false)
@@ -609,17 +615,15 @@ class EditorViewModel : ViewModel() {
                 check(positionSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
                 preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
                 paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
-                previewSaves?.flush()
                 // Local queues are durable now; external publication continues independently.
                 workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) {
                     notebookStorage?.keepOpen(null)
-                    repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() }
                 }
                 restoring = true
                 mutableWorkspace.value = mutableWorkspace.value.copy(current = null, recovered = false)
                 regionJob?.cancel()
-                lazyBase = null; hydrated.clear(); hydratingAll = false; regionLoading = false
+                lazyBase = null; hydrated.clear(); hydratingAll = false; regionLoading = false; regionFailed = false
                 closing = false
                 edits.restore(emptyList()); restoring = false
                 refreshList()
@@ -652,7 +656,7 @@ class EditorViewModel : ViewModel() {
     fun clearError() { mutableWorkspace.value = mutableWorkspace.value.copy(error = null, recovered = false) }
     fun retrySave() {
         viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true); startBackgroundLoading() }
+            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true); requestVisibleRegion(); startBackgroundLoading() }
             catch (e: Exception) { fail(e) }
         }
     }
@@ -1064,7 +1068,11 @@ class EditorViewModel : ViewModel() {
         val bottom = viewport.bottom + 500f
         if (regionTop == top && regionBottom == bottom) return
         regionTop = top; regionBottom = bottom
-        if (regionJob?.isActive == true) return
+        stopBackgroundLoading()
+        val run = ++regionRun
+        regionJob?.cancel()
+        regionLoading = true; regionFailed = false
+        mutableUi.value = mutableUi.value.copy(loadingRegion = true, busy = true, canUndo = false, canRedo = false)
         regionJob = viewModelScope.launch {
             try {
                 do {
@@ -1073,7 +1081,10 @@ class EditorViewModel : ViewModel() {
                     val needed = withContext(Dispatchers.IO) { repository!!.regionPending(base.info.id, requestedTop, requestedBottom, loaded) }
                     if (needed) {
                         regionLoading = true; publish()
-                        val entries = withContext(Dispatchers.IO) { repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) }
+                        val entries = withContext(Dispatchers.IO) {
+                            val context = currentCoroutineContext()
+                            repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) { context.ensureActive() }
+                        }
                         while (edits.busy) kotlinx.coroutines.delay(16)
                         if (lazyBase !== base || closing) return@launch
                         val added = entries.filter { it.id !in hydrated }
@@ -1082,8 +1093,12 @@ class EditorViewModel : ViewModel() {
                     }
                 } while (requestedTop != regionTop || requestedBottom != regionBottom)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-            catch (e: Exception) { fail(e); regionTop = Float.NaN; regionBottom = Float.NaN }
-            finally { if (lazyBase === base || mutableWorkspace.value.current?.id == base.info.id) { regionLoading = false; publish() } }
+            catch (e: Exception) { regionFailed = true; fail(e) }
+            finally { if (regionRun == run && (lazyBase === base || mutableWorkspace.value.current?.id == base.info.id)) {
+                regionLoading = false; publish()
+                if (regionFailed) { regionTop = Float.NaN; regionBottom = Float.NaN }
+                else if (!closing && lazyBase === base) startBackgroundLoading()
+            } }
         }
     }
     private suspend fun hydrateAll() {
@@ -1094,7 +1109,10 @@ class EditorViewModel : ViewModel() {
             regionJob?.cancel(); regionJob?.join()
             regionLoading = true; publish()
             val loaded = hydrated.toSet()
-            val entries = withContext(Dispatchers.IO) { repository!!.loadRegion(base.info.id, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, loaded) }
+            val entries = withContext(Dispatchers.IO) {
+                val context = currentCoroutineContext()
+                repository!!.loadRegion(base.info.id, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, loaded) { context.ensureActive() }
+            }
             while (edits.busy) kotlinx.coroutines.delay(16)
             check(lazyBase === base && !closing) { AppMessages.text(R.string.wait_note) }
             val added = entries.filter { it.id !in hydrated }
@@ -1124,12 +1142,14 @@ class EditorViewModel : ViewModel() {
                     while (active() && interacting()) kotlinx.coroutines.delay(20)
                     if (!active()) break
                     val loaded = hydrated.toSet()
-                    val top = viewport.position.top; val bottom = viewport.bottom
+                    val height = (viewport.bottom - viewport.position.top).coerceAtLeast(1000f)
+                    val top = (viewport.position.top - height).coerceAtLeast(0f)
+                    val bottom = viewport.bottom + height
                     val entries = withContext(Dispatchers.IO) {
                         repository!!.loadNextRegion(base.info.id, top, bottom, loaded) { context.ensureActive() }
                     }
                     if (!active()) break
-                    if (entries.isEmpty()) { lazyBase = null; break }
+                    if (entries.isEmpty()) break // Unread distant regions remain referenced, never assumed empty.
                     for (batch in entries.chunked(128)) {
                         while (active() && interacting()) kotlinx.coroutines.delay(16)
                         if (!active()) return@launch
@@ -1199,9 +1219,10 @@ class EditorViewModel : ViewModel() {
             contentRevision = canvasRevision,
             loadingRegion = regionLoading,
             loadingRest = backgroundLoading,
-            busy = edits.busy || selectionWorking || selectionGesture || regionLoading,
-            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading,
-            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading,
+            partialContent = lazyBase != null,
+            busy = edits.busy || selectionWorking || selectionGesture || regionLoading || regionFailed,
+            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
+            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
             selectionCount = selection.size,
         )
         updateViewportOverlay()

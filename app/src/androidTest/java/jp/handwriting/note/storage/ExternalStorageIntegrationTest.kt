@@ -45,6 +45,7 @@ class ExternalStorageIntegrationTest {
             assertTrue(withTimeout(30000) { storage.awaitSync() })
             test(directory, tree, scope, storage, manifests)
         } finally {
+            callProvider("test-hold-reads", Bundle().apply { putBoolean("hold", false) })
             callProvider("test-hold-writes", Bundle().apply { putBoolean("hold", false) })
             scope.coroutineContext[Job]!!.cancelAndJoin(); failWrites(false)
             callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", false) })
@@ -267,8 +268,9 @@ class ExternalStorageIntegrationTest {
             assertEquals(listOf(1L), repository.loadVisible(original.info.id, 1f).entries.map { it.id })
             val changed = placedStroke(1, 300f)
             callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", true) })
-            assertThrows(Exception::class.java) { repository.save(NoteSnapshot(manifest.copy(strokes = listOf(
-                StrokeRef(1, changed.value.storageId), manifest.strokes[1])), listOf(changed))) }
+            repository.save(NoteSnapshot(manifest.copy(strokes = listOf(
+                StrokeRef(1, changed.value.storageId), manifest.strokes[1])), listOf(changed)))
+            assertFalse(storage.awaitSync())
             assertTrue(PartialNoteJournal.exists(File(directory, "notes"), original.info.id))
             assertTrue(bodies(directory).isEmpty())
             callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", false) })
@@ -279,7 +281,33 @@ class ExternalStorageIntegrationTest {
             assertFalse(PartialNoteJournal.exists(File(directory, "notes"), original.info.id))
         }
     }
-    @Test fun initialViewportIsShownThenRestLoadsWithoutBlockingEditsAndStopsOnSwitchOrClose() = runBlocking {
+    @Test fun pendingDownloadDoesNotBlockNewDurableEditAndCannotRestoreDeletedInk() = runBlocking {
+        fixture { directory, _, _, storage, manifests ->
+            val original = manifests.first()
+            val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
+            val entries = listOf(placedStroke(1, 100f), placedStroke(2, 10000f), placedStroke(3, 20000f))
+            val manifest = original.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
+            repository.save(NoteSnapshot(manifest, entries)); assertTrue(storage.awaitSync()); storage.releaseWorkingCopies()
+            assertEquals(listOf(1L), repository.loadVisible(original.info.id, 1f).entries.map { it.id })
+            val first = placedStroke(1, 200f)
+            val changed = manifest.copy(strokes = listOf(StrokeRef(1, first.value.storageId)) + manifest.strokes.drop(1))
+            callProvider("test-hold-reads", Bundle().apply { putBoolean("hold", true) })
+            repository.save(NoteSnapshot(changed, listOf(first)))
+            val upload = async(Dispatchers.IO) { storage.awaitSync() }
+            withTimeout(10000) { while (!callProvider("test-read-waiting")!!.getBoolean("waiting")) delay(10) }
+            val latest = changed.copy(strokes = changed.strokes.drop(1))
+            // This must fsync while the provider is still blocked, without downloading anything.
+            withTimeout(2000) { withContext(Dispatchers.Default) { repository.save(NoteSnapshot(latest, emptyList())) } }
+            assertEquals(latest, NoteFiles(File(directory, "notes")).read(original.info.id).manifest)
+            assertTrue(bodies(directory).isEmpty())
+            callProvider("test-hold-reads", Bundle().apply { putBoolean("hold", false) })
+            assertTrue(withTimeout(30000) { upload.await() })
+            val reloaded = repository.load(original.info.id)
+            assertEquals(listOf(2L, 3L), reloaded.entries.map { it.id })
+            assertFalse(PartialNoteJournal.exists(File(directory, "notes"), original.info.id))
+        }
+    }
+    @Test fun prefetchStopsAtNeighbourhoodAndStopsOnSwitchOrClose() = runBlocking {
         fixture { directory, _, _, storage, manifests ->
             val original = manifests.first()
             val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
@@ -308,10 +336,12 @@ class ExternalStorageIntegrationTest {
                 waitUntil { firstFrame.get() != null && usablePrefetch.get() }
                 assertEquals(listOf(1L), firstFrame.get())
                 withContext(Dispatchers.Main) { assertEquals(listOf(31L), model.edits.addAll(listOf(placedStroke(99, 150f).value))) }
-                waitUntil { model.edits.snapshot().size == 31 && !model.ui.value.loadingRest && !model.ui.value.busy }
+                waitUntil { model.edits.snapshot().size == 2 && !model.ui.value.loadingRest && !model.ui.value.busy }
+                delay(300)
+                assertEquals(listOf(1L, 31L), model.edits.snapshot().map { it.id })
                 withContext(Dispatchers.Main) {
                     assertTrue(model.edits.canUndo); model.edits.undo()
-                    assertEquals((1L..30L).toList(), model.edits.snapshot().map { it.id })
+                    assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
                     model.edits.redo(); model.closeNote()
                 }
                 waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
@@ -331,6 +361,12 @@ class ExternalStorageIntegrationTest {
                 firstFrame.set(null)
                 withContext(Dispatchers.Main) { model.openNote(original.info.id) }
                 waitUntil { firstFrame.get() != null }
+                callProvider("test-fail-reads", Bundle().apply { putBoolean("fail", true) })
+                withContext(Dispatchers.Main) {
+                    model.viewport.restore(jp.handwriting.note.editor.ViewPosition(top = 200000f)); model.viewportChanged()
+                }
+                waitUntil { model.workspace.value.error != null && !model.ui.value.loadingRegion }
+                assertTrue("An unavailable viewport must remain uneditable", model.ui.value.busy)
                 withContext(Dispatchers.Main) { model.closeNote() }
                 waitUntil { model.workspace.value.current == null && !model.workspace.value.working }
                 delay(300)
@@ -359,7 +395,8 @@ class ExternalStorageIntegrationTest {
             val elapsedMs = (System.nanoTime() - start) / 1_000_000
             val added = blocks.names() - before
             val bytes = added.sumOf { blocks.read(it).size.toLong() }
-            assertEquals(2, added.size)
+            // Compaction can also fit this empty notebook into a single block.
+            assertTrue(added.size in 1..2)
             assertTrue(bytes < 2L * BlockPackedFiles.BLOCK_SIZE)
             val raw = PackedDocumentFiles(context.contentResolver, tree, "inkdata")
             raw.names()

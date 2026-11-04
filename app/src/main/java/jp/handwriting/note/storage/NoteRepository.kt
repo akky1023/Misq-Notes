@@ -137,6 +137,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         return target
     }
     @Synchronized fun updatePreview(snapshot: NoteSnapshot) {
+        if (PartialNoteJournal.exists(files.directory, snapshot.manifest.info.id)) return
         // A delayed preview must not attach an older snapshot to a newer committed note.
         if (provisional(snapshot.manifest.info.id) == null && files.read(snapshot.manifest.info.id).manifest == snapshot.manifest) thumbnail(snapshot)
     }
@@ -160,8 +161,12 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         if (previous == null || previous.entries.any { it.value.storageId !in strokes }) orphanSweeps[id] = 2
         persist {
             val clean = listCache?.changing()
-            if (snapshot.entries.size < snapshot.manifest.strokes.size && !files.hasLocalBody(id))
+            if (!files.hasLocalBody(id) && (snapshot.entries.size < snapshot.manifest.strokes.size || PartialNoteJournal.exists(files.directory, id))) {
                 PartialNoteJournal.write(files.directory, snapshot)
+                listCache?.saved(summary(snapshot.manifest), clean == true)
+                files.invalidateThumbnail(id)
+                return@persist
+            }
             files.save(snapshot.manifest, snapshot.entries.associate { it.value.storageId to it.value.placement }) { storageId -> encodeStroke(strokes.getValue(storageId).value) }
             if (PartialNoteJournal.exists(files.directory, id)) PartialNoteJournal.clear(files.directory, id)
             listCache?.saved(summary(snapshot.manifest), clean == true)
@@ -205,44 +210,41 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     @Synchronized internal fun loadVisible(id: String, aspect: Float, position: jp.handwriting.note.editor.ViewPosition? = null): LoadedNote {
         spatialSource = null
         fun fallback(): LoadedNote = load(id).also { if (!it.recovered && files.hasExternal(id)) persist {} }
-        val source = runCatching { files.spatial(id) }.getOrNull() ?: return fallback()
+        val original = runCatching { files.spatial(id) }.getOrNull() ?: return fallback()
+        val journal = PartialNoteJournal.read(files.directory, id)
+        val source = journal?.let { original.withManifest(it.manifest) } ?: original
         val manifest = source.manifest
         val viewport = position ?: manifest.info.position
         val top = viewport.top
         val height = (1000f * aspect / viewport.zoom).coerceAtLeast(1000f)
         return try {
-            val entries = source.load((top - 500f).coerceAtLeast(0f), top + height + 500f, emptySet()) { ref, bytes ->
+            val current = manifest.strokes.associate { it.id to it.storageId }
+            val changed = journal?.placements?.keys.orEmpty()
+            val entries = (source.load((top - 500f).coerceAtLeast(0f), top + height + 500f, emptySet()) { ref, bytes ->
+                if (current[ref.id] == ref.storageId && ref.storageId !in changed)
                 OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))
-            }.sortedBy { it.id }
+                else null
+            }.filterNotNull() + manifest.strokes.filter { it.storageId in changed }.map { ref ->
+                OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, checkNotNull(journal).stroke(ref.storageId)))
+            }).sortedBy { it.id }
             spatialSource = source
             LoadedNote(manifest, entries, false, partial = entries.size < manifest.strokes.size, contentBottom = source.bottom)
         } catch (_: Exception) { fallback() }
     }
-    @Synchronized internal fun loadRegion(id: String, top: Float, bottom: Float, loaded: Set<Long>): List<OrderedEdits.Entry<EditorStroke>> {
-        val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
-        return try {
-            source.load(top, bottom, loaded) { ref, bytes -> OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }.sortedBy { it.id }
-        } catch (_: Exception) {
-            val refs = source.manifest.strokes.filter { it.id !in loaded }
-            files.readStrokes(id, refs) { ref, bytes -> OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }
+    internal fun loadRegion(id: String, top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit = {}): List<OrderedEdits.Entry<EditorStroke>> {
+        val records = synchronized(this) {
+            val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
+            source.load(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
         }
+        return records.map { (ref, bytes) -> checkpoint(); OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }.sortedBy { it.id }
     }
     @Synchronized internal fun regionPending(id: String, top: Float, bottom: Float, loaded: Set<Long>): Boolean =
         spatialSource?.takeIf { it.manifest.info.id == id }?.pending(top, bottom, loaded) == true
     internal fun loadNextRegion(id: String, top: Float, bottom: Float, loaded: Set<Long>,
         checkpoint: () -> Unit): List<OrderedEdits.Entry<EditorStroke>> {
-        val records = try { synchronized(this) {
+        val records = synchronized(this) {
             val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
             source.next(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
-        } } catch (e: kotlinx.coroutines.CancellationException) { throw e }
-        catch (_: Exception) {
-            checkpoint()
-            return synchronized(this) {
-                val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
-                files.readStrokes(id, source.manifest.strokes.filter { it.id !in loaded }) { ref, bytes ->
-                    checkpoint(); OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))
-                }
-            }
         }
         // Native outline generation must not hold the repository lock while the user saves/navigates.
         return records.map { (ref, bytes) -> checkpoint(); OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }.sortedBy { it.id }
@@ -269,7 +271,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         }
         recent = loaded
         val placements = loaded.entries.associate { it.value.storageId to it.value.placement }
-        if (!loaded.recovered && files.needsPlacements(id, placements)) persist {
+        if (!loaded.recovered && !PartialNoteJournal.exists(files.directory, id) && files.needsPlacements(id, placements)) persist {
             files.save(loaded.manifest, placements) {
                 storageId -> encodeStroke(loaded.entries.first { it.value.storageId == storageId }.value)
             }

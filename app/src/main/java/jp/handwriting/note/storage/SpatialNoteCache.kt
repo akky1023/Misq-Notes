@@ -17,15 +17,19 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
     }
 
     internal class Source(val manifest: NoteManifest, val packs: List<Pack>, private val files: PackedFiles) {
+        private val current = manifest.strokes.associate { it.id to it.storageId }
+        private fun Member.available(loaded: Set<Long>) = ref.id !in loaded && current[ref.id] == ref.storageId
+        fun withManifest(manifest: NoteManifest) = Source(manifest, packs, files)
         val bottom get() = packs.maxOfOrNull { pack -> pack.members.maxOf { it.placement.bottom } } ?: 0f
         fun pending(top: Float, bottom: Float, loaded: Set<Long>) = packs.any { pack ->
-            pack.members.any { it.ref.id !in loaded && it.placement.bottom >= top && it.placement.top <= bottom }
+            pack.members.any { it.available(loaded) && it.placement.bottom >= top && it.placement.top <= bottom }
         }
-        fun <T> load(top: Float, bottom: Float, loaded: Set<Long>, decode: (StrokeRef, ByteArray) -> T): List<T> {
+        fun <T> load(top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit = {}, decode: (StrokeRef, ByteArray) -> T): List<T> {
             val result = mutableListOf<T>()
             for (pack in packs) {
-                if (pack.members.none { it.ref.id !in loaded && it.placement.bottom >= top && it.placement.top <= bottom }) continue
-                result += readPack(pack, loaded, {}, decode)
+                if (pack.members.none { it.available(loaded) && it.placement.bottom >= top && it.placement.top <= bottom }) continue
+                checkpoint()
+                result += readPack(pack, loaded, checkpoint, decode)
             }
             return result
         }
@@ -33,8 +37,9 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
         fun <T> next(top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit,
             decode: (StrokeRef, ByteArray) -> T): List<T> {
             val center = (top.toDouble() + bottom.toDouble()) / 2
-            val pack = packs.filter { it.members.any { member -> member.ref.id !in loaded } }.minByOrNull { candidate ->
-                candidate.members.asSequence().filter { it.ref.id !in loaded }.minOf { member ->
+            val pack = packs.filter { it.members.any { member -> member.available(loaded) &&
+                member.placement.bottom >= top && member.placement.top <= bottom } }.minByOrNull { candidate ->
+                candidate.members.asSequence().filter { it.available(loaded) }.minOf { member ->
                     when {
                         center < member.placement.top -> member.placement.top - center
                         center > member.placement.bottom -> center - member.placement.bottom
@@ -56,7 +61,7 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
                         require(input.readInt() == member.size)
                         val bytes = ByteArray(member.size).also(input::readFully)
                         require(NotebookArchive.digest(bytes) == member.hash)
-                        if (member.ref.id !in loaded) result += decode(member.ref, bytes)
+                        if (member.available(loaded)) result += decode(member.ref, bytes)
                     }
                     require(input.read() == -1)
                 } }

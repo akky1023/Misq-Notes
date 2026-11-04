@@ -22,6 +22,10 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
     private val deleted = mutableSetOf<String>()
     private val cached = mutableMapOf<String, Pair<String, NoteSummary>>()
     private val checkedPreviews = mutableSetOf<String>()
+    // Repeated switches reuse a bounded, verified index; payloads are still checked on read.
+    private val spatialSources = object : LinkedHashMap<String, SpatialNoteCache.Source>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SpatialNoteCache.Source>?) = size > 2
+    }
     var available = false
 
     init {
@@ -67,7 +71,12 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
     override fun contains(id: String) = path(id) in baseline && id !in deleted
     override fun spatial(id: String): SpatialNoteCache.Source? {
         if (!available || !contains(id)) return null
-        return spatialReader?.invoke(baseline.getValue(path(id)))?.also { require(it.manifest.info.id == id) }
+        val hash = baseline.getValue(path(id))
+        spatialSources[hash]?.let { return it }
+        return spatialReader?.invoke(hash)?.also {
+            require(it.manifest.info.id == id)
+            if (it.manifest.strokes.size <= 20_000) spatialSources[hash] = it
+        }
     }
     fun isDeleted(path: String) = noteId(path)?.let { it in deleted } == true
     override fun ensure(id: String) {
@@ -116,6 +125,7 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         // A deletion made after the captured save must remain pending.
         deleted.removeAll { path(it) !in files }
         baseline = files.toMap()
+        spatialSources.keys.retainAll(baseline.values.toSet())
         save()
     }
     fun rebuildCatalog(captured: Map<String, ArchiveBlob> = emptyMap()) {

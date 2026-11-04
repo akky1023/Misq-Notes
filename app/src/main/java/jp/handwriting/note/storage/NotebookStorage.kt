@@ -157,7 +157,7 @@ internal class NotebookStorage(private val context: Context, private val directo
         return files
     }
     private fun snapshot(): ArchiveSnapshot {
-        working?.takeIf { it.available }?.let { set -> recoverPartial(set) }
+        check(PartialNoteJournal.ids(File(directory, "notes")).isEmpty()) { "Local edits must be materialized before taking an upload snapshot" }
         val local = localFiles().filterKeys { working?.isDeleted(it) != true }
         val references = working?.references().orEmpty().toMutableMap()
         val copy = local.filter { (path, file) ->
@@ -250,12 +250,19 @@ internal class NotebookStorage(private val context: Context, private val directo
         File(directory, "notes/.list-dirty").writeText("rebuild")
     }
     private fun saveExternal() {
+        // Fetch unopened bodies without the persistence monitor: closing another note and
+        // fsync'ing its edits must not wait for a provider download.
+        if (!materializePartial()) { queue.request(Unit); return }
         val set: ExternalWorkingSet
         val target: NotebookArchive
         val captured: ArchiveSnapshot
         val capturedVersion: Long
         synchronized(this) {
             if (!pending.exists()) return
+            if (PartialNoteJournal.ids(File(directory, "notes")).isNotEmpty()) {
+                queue.request(Unit)
+                return
+            }
             set = checkNotNull(working)
             check(set.available) { AppMessages.text(R.string.storage_unavailable) }
             check(!blockedByRemoteChange) { AppMessages.text(R.string.storage_incoming) }
@@ -280,6 +287,41 @@ internal class NotebookStorage(private val context: Context, private val directo
                 if (version == capturedVersion) pending.delete()
             }
         }
+    }
+    private fun materializePartial(): Boolean {
+        val root = File(directory, "notes")
+        val ids = synchronized(this) { PartialNoteJournal.ids(root) }
+        for (id in ids) {
+            val prepared = synchronized(this) {
+                val set = checkNotNull(working)
+                check(set.available) { AppMessages.text(R.string.storage_unavailable) }
+                if (set.isDeleted("notes/$id.misq")) {
+                    PartialNoteJournal.clear(root, id)
+                    null
+                } else PartialNoteJournal.read(root, id)?.let { journal ->
+                    journal to set.blob(set.baseline.getValue("notes/$id.misq"))
+                }
+            } ?: continue
+            val (journal, base) = prepared
+            val work = File(directory, ".notes-fetch-${UUID.randomUUID()}").also { check(it.mkdir()) }
+            val temporary = File(work, "$id.misq")
+            try {
+                base.copyTo(temporary)
+                val target = MisqFile(temporary)
+                check(target.readManifest().manifest.info.id == id)
+                journal.apply(target)
+                target.validate()
+                synchronized(this) {
+                    val set = checkNotNull(working)
+                    if (set.isDeleted("notes/$id.misq")) return@synchronized
+                    // An edit or deletion made during IO wins over the old download.
+                    if (PartialNoteJournal.read(root, id)?.token != journal.token) return false
+                    Files.move(temporary.toPath(), File(root, "$id.misq").toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
+                    PartialNoteJournal.clear(root, id)
+                }
+            } finally { temporary.delete(); work.delete() }
+        }
+        return synchronized(this) { PartialNoteJournal.ids(root).isEmpty() }
     }
     private fun publishRegions(snapshot: Map<String, ArchiveBlob>): Set<String> {
         val store = regions ?: regionStore(checkNotNull(uri)).also { regions = it }
@@ -322,7 +364,13 @@ internal class NotebookStorage(private val context: Context, private val directo
     suspend fun awaitSync(): Boolean {
         if (working == null) return legacy.awaitSync()
         connection?.join()
-        return connectionState.value.error == null && queue.flush() && !pending.exists()
+        if (connectionState.value.error != null) return false
+        while (true) {
+            val generation = queue.state.value.latest
+            if (!queue.flush(generation)) return false
+            if (!pending.exists()) return true
+            if (queue.state.value.latest <= generation) return false
+        }
     }
     @Synchronized fun retryPending() {
         if (working == null) { legacy.retryPending(); return }

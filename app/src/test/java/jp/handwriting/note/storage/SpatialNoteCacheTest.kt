@@ -35,10 +35,25 @@ class SpatialNoteCacheTest {
         memory.reads.clear()
         assertEquals(listOf(3L), source.next(5000f, 6000f, loaded.toSet(), {}) { ref, _ -> ref.id })
         assertEquals(1, memory.reads.count { it.startsWith("region-") })
+        memory.reads.clear()
+        assertTrue(source.next(20000f, 23000f, emptySet(), {}) { ref, _ -> ref.id }.isEmpty())
+        assertTrue(memory.reads.isEmpty()) // Reaching the end of the neighbourhood must not fetch distant packs.
         assertTrue(source.next(0f, 1000f, setOf(1L, 2L, 3L, 4L), {}) { ref, _ -> ref.id }.isEmpty())
         assertThrows(java.util.concurrent.CancellationException::class.java) {
             source.next(0f, 1000f, emptySet(), { throw java.util.concurrent.CancellationException() }) { _, _ -> error("cancelled before decoding") }
         }
+    }
+    @Test fun pendingJournalManifestSuppressesDeletedAndReplacedRecords() {
+        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("overlay")
+        val refs = (1L..3L).map { StrokeRef(it, UUID.randomUUID().toString()) }
+        notes.save(empty.copy(strokes = refs, nextId = 4), refs.associate { it.storageId to StrokePlacement(it.id * 1000f, it.id * 1000f, it.id * 1000f + 20) }) { byteArrayOf(1) }
+        val memory = Memory(); val cache = SpatialNoteCache(memory); val file = notes.document(empty.info.id).file
+        val hash = NotebookArchive.digest(file); cache.publish(file, hash)
+        val replacement = refs[1].copy(storageId = UUID.randomUUID().toString())
+        val source = cache.open(hash)!!.withManifest(empty.copy(strokes = listOf(replacement, refs[2]), nextId = 4))
+        assertEquals(listOf(3L), source.load(0f, 10000f, emptySet()) { ref, _ -> ref.id })
+        assertFalse(source.pending(0f, 2500f, emptySet()))
+        assertTrue(source.next(0f, 2500f, emptySet(), {}) { ref, _ -> ref.id }.isEmpty())
     }
     @Test fun changedBandDoesNotRewriteOtherBandsAndDamagedCacheIsRejected() {
         val notes = NoteFiles(temp.newFolder()); val empty = notes.create("spatial")

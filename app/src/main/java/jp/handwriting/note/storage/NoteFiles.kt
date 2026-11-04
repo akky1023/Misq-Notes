@@ -116,6 +116,10 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
             if (alias != null && alias.id != id) return@mapNotNull null
             NoteSummary(id, AppMessages.text(R.string.unreadable_note), document(id).file.lastModified(), 0, AppMessages.text(R.string.note_data_read_failed))
         }
+    } + PartialNoteJournal.ids(root).map { id ->
+        val note = checkNotNull(PartialNoteJournal.read(root, id)).manifest
+        NoteSummary(id, note.info.title, note.info.updatedAt, note.strokes.size,
+            createdAt = note.info.createdAt, paper = note.info.paper, thumbnail = thumbnail(id).takeIf { it.exists() }?.path)
     }).associateBy { it.id }.values.sortedByDescending { it.updatedAt }
 
     /** Missing working files are represented by the newest remaining version, without publishing it. */
@@ -135,6 +139,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
 
     fun read(id: String): ReadManifest {
+        PartialNoteJournal.read(root, id)?.let { return ReadManifest(it.manifest, false) }
         if (packed(id)) return document(id).readManifest()
         val file = manifestFile(id)
         val (bytes, recovered) = readWithBackup(file)
@@ -179,17 +184,30 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
     internal fun encodeManifest(note: NoteManifest): ByteArray = NoteManifestCodec.encodeManifest(note)
     fun stroke(note: String, storageId: String): ByteArray {
+        PartialNoteJournal.read(root, note)?.takeIf { it.contains(storageId) }?.let { return it.stroke(storageId) }
         if (packed(note)) return document(note).stroke(uuid(storageId))
         val bytes = readWithBackup(strokeFile(note, storageId)).first
         known.getOrPut(note) { mutableSetOf() }.add(storageId)
         return bytes
     }
-    internal fun <T> readStrokes(id: String, refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> =
-        if (packed(id)) document(id).readStrokes(refs, decode)
+    internal fun <T> readStrokes(id: String, refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> {
+        val journal = PartialNoteJournal.read(root, id)
+        if (journal != null) {
+            val original = refs.filter { !journal.contains(it.storageId) }
+            val values = if (original.isEmpty()) emptyMap() else document(id).readStrokes(original) { ref, bytes ->
+                ref.storageId to decode(ref, bytes)
+            }.toMap()
+            return refs.map { ref -> if (journal.contains(ref.storageId)) decode(ref, journal.stroke(ref.storageId)) else values.getValue(ref.storageId) }
+        }
+        return if (packed(id)) document(id).readStrokes(refs, decode)
         else refs.map { decode(it, stroke(id, it.storageId)) }
+    }
     fun rename(id: String, title: String) {
         val note = read(id).manifest
-        save(note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))) { error("Existing stroke missing") }
+        val renamed = note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))
+        val journal = PartialNoteJournal.read(root, id)
+        if (journal != null) PartialNoteJournal.write(root, renamed, journal.placements, journal::stroke)
+        else save(renamed) { error("Existing stroke missing") }
     }
     /** User deletion removes aliases too, otherwise a missing original reappears provisionally. */
     internal fun deleteNotebook(id: String) {
