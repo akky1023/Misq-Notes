@@ -13,6 +13,34 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class StrokeRenderCacheTest {
+    @Test fun crossingViewportEdgesReusesRetainedInkButEditsRemoveStaleGeometry() {
+        val cache = StrokeRenderCache()
+        val target = RenderNode("viewport-edge-test")
+        val all = (1L..4L).map { it to EditorStroke(ink()) }
+        val drawn = mutableListOf<EditorStroke>()
+        fun draw(visible: List<Pair<Long, EditorStroke>>, retained: Set<EditorStroke>) {
+            val canvas = target.beginRecording(1000, 1000)
+            try { cache.draw(canvas, visible, ViewPosition(), 1000, 1000, WorldPoint(0f, 0f),
+                { false }, retainedStrokes = retained) { _, stroke, _ -> drawn.add(stroke) } }
+            finally { target.endRecording() }
+        }
+        try {
+            val retained = all.map { it.second }.toSet()
+            draw(all.take(3), retained); drawn.clear()
+            draw(all.subList(1, 3), retained)
+            assertTrue("Leaving the viewport must not re-record its neighbours", drawn.isEmpty())
+            draw(all.take(3), retained)
+            assertTrue("Returning strokes must reuse the same display list", drawn.isEmpty())
+            draw(all.drop(1), retained)
+            assertEquals(listOf(all.last().second), drawn)
+            drawn.clear()
+            draw(all.drop(1), retained - all.first().second)
+            assertEquals("An erased off-screen stroke must leave the display list", all.drop(1).map { it.second }, drawn)
+            val replacement = EditorStroke(ink()); val updated = listOf(all[1], 3L to replacement, all[3])
+            drawn.clear(); draw(updated, updated.map { it.second }.toSet())
+            assertEquals(updated.map { it.second }, drawn)
+        } finally { cache.clear(); target.discardDisplayList() }
+    }
     @Test fun ordinaryRetainedGroupsKeepTheirBaseAndTailWhenTheyReturnWithoutZooming() {
         val cache = StrokeRenderCache()
         val target = RenderNode("retained-reentry")
