@@ -216,6 +216,10 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var fingerDevice: Int? = null
     private var fingerSelectionId: Int? = null
     private var fingerStart: ViewPosition? = null
+        set(value) {
+            field = value
+            model.viewportGestureActive = value != null
+        }
     private var fingerFocusX = 0f
     private var fingerFocusY = 0f
     private var fingerSpan = 0f

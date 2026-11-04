@@ -149,6 +149,7 @@ class EditorViewModel : ViewModel() {
     private var backgroundRun = 0L
     private var backgroundLoading = false
     private var regionLoading = false
+    internal var viewportGestureActive = false
     private var regionFailed = false
     private var regionTop = Float.NaN
     private var regionBottom = Float.NaN
@@ -1140,7 +1141,9 @@ class EditorViewModel : ViewModel() {
     }
     private fun requestVisibleRegion() {
         val base = lazyBase ?: return
-        if (restoring || closing || hydratingAll) return
+        // Loading marks the editor busy. Starting it between finger samples would
+        // cancel the pan/pinch and restore the gesture's original viewport.
+        if (restoring || closing || hydratingAll || viewportGestureActive) return
         val top = (viewport.position.top - 500f).coerceAtLeast(0f)
         val bottom = viewport.bottom + 500f
         if (regionTop == top && regionBottom == bottom) return
@@ -1219,7 +1222,7 @@ class EditorViewModel : ViewModel() {
                 kotlinx.coroutines.delay(100) // Present the initial viewport before prefetch work.
                 val context = currentCoroutineContext()
                 fun active() = backgroundRun == run && lazyBase === base && !closing
-                fun interacting() = edits.busy || selectionWorking || selectionGesture || insertingSpace ||
+                fun interacting() = viewportGestureActive || edits.busy || selectionWorking || selectionGesture || insertingSpace ||
                     regionJob?.isActive == true || hydratingAll
                 while (active()) {
                     while (active() && interacting()) kotlinx.coroutines.delay(20)

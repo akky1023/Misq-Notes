@@ -68,6 +68,93 @@ class Format3IntegrationTest {
             edit.commit(); folder.deleteRecursively()
         }
     }
+    @Test fun partialNoteSupportsContinuousSwipePinchAndLoadsFinalViewport() = runBlocking {
+        fixture { folder, storage, manifest, _ ->
+            storage.migrateFormat3()
+            val models = ViewModelStore()
+            val model = withContext(Dispatchers.Main) {
+                ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
+                    it.viewport.size(1000f, 1000f); it.configureStorage(context, folder, File(folder, "ui-cache")); it.start(folder)
+                }
+            }
+            suspend fun ready() = withTimeout(30000) {
+                while (model.workspace.value.working || model.ui.value.busy || model.ui.value.loadingRest) delay(10)
+            }
+            try {
+                ready()
+                withContext(Dispatchers.Main) { model.openNote(manifest.info.id) }
+                ready()
+                withContext(Dispatchers.Main) {
+                    assertTrue(model.ui.value.partialContent)
+                    assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
+                    val display = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+                        .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                    val canvas = InkCanvasView(context.createDisplayContext(display), model)
+                    canvas.layout(0, 0, 1000, 1000)
+                    fun touch(action: Int, vararg points: Pair<Float, Float>) {
+                        val properties = points.indices.map { index -> android.view.MotionEvent.PointerProperties().apply {
+                            id = index; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+                        } }.toTypedArray()
+                        val coordinates = points.map { point -> android.view.MotionEvent.PointerCoords().apply {
+                            x = point.first; y = point.second; pressure = 1f
+                        } }.toTypedArray()
+                        val event = android.view.MotionEvent.obtain(0L, 10L, action, points.size, properties, coordinates,
+                            0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        try { assertTrue(canvas.onTouchEvent(event)) } finally { event.recycle() }
+                    }
+                    val down = android.view.MotionEvent.ACTION_DOWN
+                    val move = android.view.MotionEvent.ACTION_MOVE
+                    val up = android.view.MotionEvent.ACTION_UP
+                    // Multiple samples in one UI turn reproduce cancellation before IO can finish.
+                    touch(down, 500f to 900f)
+                    touch(move, 500f to 500f)
+                    assertFalse(model.ui.value.busy)
+                    touch(move, 500f to 100f)
+                    assertEquals(800f, model.viewport.position.top, .01f)
+                    touch(up, 500f to 100f)
+                }
+                ready()
+                withContext(Dispatchers.Main) {
+                    val display = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+                        .getDisplay(android.view.Display.DEFAULT_DISPLAY)
+                    val canvas = InkCanvasView(context.createDisplayContext(display), model)
+                    canvas.layout(0, 0, 1000, 1000)
+                    fun touch(action: Int, vararg xs: Float, y: Float = 500f) {
+                        val properties = xs.indices.map { i -> android.view.MotionEvent.PointerProperties().apply {
+                            id = i; toolType = android.view.MotionEvent.TOOL_TYPE_FINGER
+                        } }.toTypedArray()
+                        val coordinates = xs.map { value -> android.view.MotionEvent.PointerCoords().apply {
+                            x = value; this.y = y; pressure = 1f
+                        } }.toTypedArray()
+                        val event = android.view.MotionEvent.obtain(0L, 10L, action, xs.size, properties, coordinates,
+                            0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
+                        try { canvas.onTouchEvent(event) } finally { event.recycle() }
+                    }
+                    touch(android.view.MotionEvent.ACTION_DOWN, 400f)
+                    touch(android.view.MotionEvent.ACTION_POINTER_DOWN or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT), 400f, 600f)
+                    touch(android.view.MotionEvent.ACTION_MOVE, 300f, 700f)
+                    assertEquals(2f, model.viewport.position.zoom, .01f)
+                    assertFalse(model.ui.value.busy)
+                    touch(android.view.MotionEvent.ACTION_MOVE, 350f, 650f)
+                    assertEquals(1.5f, model.viewport.position.zoom, .01f)
+                    touch(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT), 350f, 650f)
+                    // Continue panning with the remaining finger to an unread region.
+                    touch(android.view.MotionEvent.ACTION_MOVE, 350f, y = -13000f)
+                    touch(android.view.MotionEvent.ACTION_UP, 350f, y = -13000f)
+                    assertFalse(model.viewportGestureActive)
+                }
+                ready()
+                assertTrue(model.edits.snapshot().any { it.id == 2L })
+                assertFalse(model.edits.snapshot().any { it.id == 3L })
+                assertNull(model.workspace.value.error)
+                withContext(Dispatchers.Main) { model.closeNote() }
+                ready()
+            } finally {
+                val job = model.viewModelScope.coroutineContext[Job]!!
+                withContext(Dispatchers.Main) { models.clear() }; job.join()
+            }
+        }
+    }
     @Test fun editorMigratesSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
         fixture { folder, storage, manifest, _ ->
             val before = NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq"))
