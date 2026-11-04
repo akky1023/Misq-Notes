@@ -11,6 +11,36 @@ import org.junit.rules.TemporaryFolder
 
 class ImmutableNoteStoreTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun visibleReadStillValidatesUnrequestedBytesAndTrailingDataInTheSamePack() {
+        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("shared pack")
+        val refs = (1L..2L).map { StrokeRef(it, UUID.randomUUID().toString()) }
+        notes.save(empty.copy(strokes = refs, nextId = 3), refs.associate {
+            val y = it.id * 100f
+            it.storageId to StrokePlacement(y, y, y + 10f)
+        }) { ByteArray(20000) { 7 } }
+        val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(notes.document(empty.info.id))
+        val rows = store.find(root, setOf(1, 2))
+        val pack = rows.getValue(1).body.objectId
+        assertEquals(pack, rows.getValue(2).body.objectId)
+        assertEquals(listOf(refs[0]), store.visible(root, 100f, 110f, emptySet()).map { it.first })
+        val file = File(store.directory, "objects/$pack"); val original = file.readBytes()
+        // Find the second body's payload, regardless of the UUID-dependent packing order.
+        val input = java.io.DataInputStream(original.inputStream())
+        input.readInt(); val count = input.readInt()
+        var offset = -1
+        repeat(count) {
+            val id = input.readUTF(); val size = input.readInt()
+            if (id == refs[1].storageId) offset = original.size - input.available()
+            input.skipBytes(size)
+        }
+        assertTrue(offset >= 0)
+        file.writeBytes(original.copyOf().also { it[offset] = 8 })
+        assertThrows(IllegalArgumentException::class.java) { store.visible(root, 100f, 110f, emptySet()) }
+        file.writeBytes(original + byteArrayOf(0))
+        assertThrows(IllegalArgumentException::class.java) { store.visible(root, 100f, 110f, emptySet()) }
+        file.writeBytes(original.copyOf(original.size - 1))
+        assertThrows(java.io.EOFException::class.java) { store.visible(root, 100f, 110f, emptySet()) }
+    }
     private fun source(): MisqFile {
         val notes = NoteFiles(temp.newFolder()); val empty = notes.create("source")
         val refs = (1L..3L).map { StrokeRef(it, UUID.randomUUID().toString()) }

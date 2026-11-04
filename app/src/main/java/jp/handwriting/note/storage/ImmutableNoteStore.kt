@@ -239,7 +239,8 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
         wanted.entries.groupBy { it.value.objectId }.forEach { (objectId, members) ->
             val requested = members.associate { it.key to it.value }; val seen = mutableSetOf<String>()
             val digest = java.security.MessageDigest.getInstance("SHA-256")
-            java.security.DigestInputStream(openObject(objectId, checkpoint), digest).use { stream -> DataInputStream(stream).use { input ->
+            // Buffer below the digest so every consumed byte is still verified, including skipped bodies.
+            java.security.DigestInputStream(openObject(objectId, checkpoint).buffered(), digest).use { stream -> DataInputStream(stream).use { input ->
                 require(input.readInt() == PACK_MAGIC)
                 val count = input.readInt(); require(count in 1..1_000_000)
                 val buffer = ByteArray(8192)
