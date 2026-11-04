@@ -17,6 +17,11 @@ import java.io.FileNotFoundException
 class WorkingSetDocumentsProvider : DocumentsProvider() {
     private val root get() = File(context!!.cacheDir, "working-set-provider").canonicalFile.also { it.mkdirs() }
     private var failWrites = false
+    private var failReads = false
+    @Volatile private var writeGate: java.util.concurrent.CountDownLatch? = null
+    @Volatile private var writeWaiting = false
+    @Volatile private var readGate: java.util.concurrent.CountDownLatch? = null
+    @Volatile private var readWaiting = false
     override fun onCreate() = true
     private fun file(id: String): File {
         val file = File(root, id).canonicalFile
@@ -60,11 +65,35 @@ class WorkingSetDocumentsProvider : DocumentsProvider() {
         val target = file(documentId); check(target != root.canonicalFile); check(target.deleteRecursively())
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
+        if (failReads && mode == "r") throw FileNotFoundException("Simulated unavailable external reads")
         if (failWrites && mode != "r") throw FileNotFoundException("Simulated unavailable external folder")
+        if (mode == "r") readGate?.let { gate ->
+            readWaiting = true
+            try { check(gate.await(30, java.util.concurrent.TimeUnit.SECONDS)) { "Timed out waiting for test read release" } }
+            finally { readWaiting = false }
+        }
+        if (mode != "r") writeGate?.let { gate ->
+            writeWaiting = true
+            try { check(gate.await(30, java.util.concurrent.TimeUnit.SECONDS)) { "Timed out waiting for test write release" } }
+            finally { writeWaiting = false }
+        }
         return ParcelFileDescriptor.open(file(documentId), ParcelFileDescriptor.parseMode(mode))
     }
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle? {
         if (method == "test-fail-writes") { failWrites = extras!!.getBoolean("fail"); return Bundle() }
+        if (method == "test-fail-reads") { failReads = extras!!.getBoolean("fail"); return Bundle() }
+        if (method == "test-hold-reads") {
+            readGate?.countDown()
+            readGate = if (extras!!.getBoolean("hold")) java.util.concurrent.CountDownLatch(1) else null
+            return Bundle()
+        }
+        if (method == "test-read-waiting") return Bundle().apply { putBoolean("waiting", readWaiting) }
+        if (method == "test-hold-writes") {
+            writeGate?.countDown()
+            writeGate = if (extras!!.getBoolean("hold")) java.util.concurrent.CountDownLatch(1) else null
+            return Bundle()
+        }
+        if (method == "test-write-waiting") return Bundle().apply { putBoolean("waiting", writeWaiting) }
         if (method == "test-new-tree") {
             val id = java.util.UUID.randomUUID().toString(); check(File(root, id).mkdir())
             val tree = DocumentsContract.buildTreeDocumentUri("net.neomenia.misqnotes.probe.tests.working-set", id)

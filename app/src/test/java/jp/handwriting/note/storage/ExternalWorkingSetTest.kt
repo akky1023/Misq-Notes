@@ -11,6 +11,22 @@ class ExternalWorkingSetTest {
     @get:Rule val temp = TemporaryFolder()
     private val remote = mutableMapOf<String, ByteArray>()
     private var reads = 0
+    @Test fun catalogUsesImmutableSnapshotWhenLiveEditingHasAlreadyAdvanced() {
+        val root = temp.newFolder(); val original = publish(root, "original")
+        val working = set(root).also { it.available = true; it.accept(baseline(original)); it.rebuildCatalog() }
+        val notes = NoteFiles(File(root, "notes"))
+        notes.rename(original.first.info.id, "uploaded")
+        val body = notes.document(original.first.info.id).file
+        val folders = File(root, "folders.hwp").also { NotebookFolders.write(it, LibraryPreferences()) }
+        ArchiveSnapshot.capture(mapOf("folders.hwp" to folders, "notes/${body.name}" to body)).use { captured ->
+            notes.rename(original.first.info.id, "newer unsaved edit")
+            working.accept(captured.mapValues { it.value.hash })
+            working.rebuildCatalog(captured)
+            working.evict()
+            assertEquals("newer unsaved edit", notes.read(original.first.info.id).manifest.info.title)
+            assertEquals(0, reads) // The uploaded hash is deliberately absent from the remote fixture.
+        }
+    }
     private fun set(root: File) = ExternalWorkingSet(root, "test-tree") { hash, file ->
         reads++; file.writeBytes(remote.getValue(hash))
     }

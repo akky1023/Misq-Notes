@@ -10,6 +10,7 @@ import androidx.lifecycle.ViewModelStore
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -22,6 +23,68 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NotebookFlowTest {
+    @Test fun navigationDoesNotSaveButNextEditRecordsViewport() = runBlocking {
+        val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "navigation-${UUID.randomUUID()}")
+        val store = ViewModelStore()
+        try {
+            val model = withContext(Dispatchers.Main) {
+                ViewModelProvider(store, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also { it.start(root) }
+            }
+            suspend fun ready(predicate: (WorkspaceUi) -> Boolean) = withTimeout(15000) {
+                model.workspace.first { !it.working && !it.saving && predicate(it) }
+            }
+            ready { it.current == null }
+            withContext(Dispatchers.Main) { model.createNote("Navigation") }
+            val original = ready { it.current != null }.current!!
+            withContext(Dispatchers.Main) { model.closeNote() }
+            ready { it.current == null }
+            val file = File(root, "notes/${original.id}.misq")
+            val before = file.readBytes()
+            withContext(Dispatchers.Main) { model.openNote(original.id) }
+            ready { it.current != null }
+            withContext(Dispatchers.Main) {
+                model.viewport.size(1000f, 1000f)
+                model.transformViewport(500f, 400f, 500f, 100f, 2f)
+                model.viewportChanged()
+                model.fitWidth()
+                model.moveViewportFromPreview(0f, 5000f)
+                model.viewportChanged()
+                // A forced metadata save must also ignore changes in position alone.
+                model.style()
+                assertEquals(original, model.workspace.value.current)
+                assertFalse(model.workspace.value.saving)
+            }
+            delay(800) // Let any mistakenly queued autosave finish.
+            assertArrayEquals(before, file.readBytes())
+            withContext(Dispatchers.Main) { model.closeNote() }
+            ready { it.current == null }
+            assertArrayEquals(before, file.readBytes())
+
+            withContext(Dispatchers.Main) { model.openNote(original.id) }
+            ready { it.current != null }
+            assertEquals(ViewPosition(top = 5000f), model.viewport.position)
+            val position = ViewPosition(top = 3000f, zoom = 2f)
+            withContext(Dispatchers.Main) {
+                model.viewport.restore(position)
+                model.viewportChanged()
+                val inputs = MutableStrokeInputBatch().add(InputToolType.STYLUS, 100f, 3200f, 0, pressure = 0.5f)
+                    .add(InputToolType.STYLUS, 200f, 3300f, 20, pressure = 0.7f)
+                val stroke = EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.pressurePen(), 0xFF205EB8.toInt(), 3f, 0.1f), inputs))
+                val id = model.edits.reserveStroke(); model.edits.resolveStroke(id, stroke)
+            }
+            ready { it.current?.position == position }
+            withContext(Dispatchers.Main) { model.closeNote() }
+            ready { it.current == null }
+            val saved = jp.handwriting.note.storage.NoteFiles(File(root, "notes")).read(original.id).manifest
+            assertEquals(position, saved.info.position)
+            assertEquals(1, saved.strokes.size)
+            assertTrue(saved.info.updatedAt > original.updatedAt)
+        } finally {
+            withContext(Dispatchers.Main) { store.clear() }
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun autosaveCloseReopenAndNotebookIsolation() = runBlocking {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "workspace-${UUID.randomUUID()}")
         val store = ViewModelStore()

@@ -20,15 +20,20 @@ class InkSurfaceSizingTest {
         val fraction = mutableFloatStateOf(1f)
         val model = EditorViewModel()
         lateinit var canvas: InkCanvasView
+        val canvasReady = java.util.concurrent.CountDownLatch(1)
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             scenario.onActivity { activity ->
                 activity.setContent {
                     BoxWithConstraints(Modifier.fillMaxSize()) {
-                        AndroidView(factory = { InkCanvasView(it, model).also { canvas = it } },
+                        AndroidView(factory = { InkCanvasView(it, model).also {
+                            canvas = it
+                            it.post { canvasReady.countDown() }
+                        } },
                             modifier = Modifier.width(maxWidth * fraction.floatValue).fillMaxHeight())
                     }
                 }
             }
+            assertTrue("Canvas was not composed", canvasReady.await(5, java.util.concurrent.TimeUnit.SECONDS))
             instrumentation.waitForIdleSync()
             var surfaceWidth = 0
             var surfaceHeight = 0

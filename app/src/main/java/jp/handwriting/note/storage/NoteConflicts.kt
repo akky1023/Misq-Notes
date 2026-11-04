@@ -14,7 +14,7 @@ internal val conflictVersionOrder = compareByDescending<NoteConflict> { it.updat
 
 /** Different contents with the same embedded ID; names and sync vendor conventions are irrelevant. */
 internal class NoteConflicts(private val notes: File, private val state: File,
-    private val remoteContains: (String) -> Boolean = { false }, private val ensure: (String) -> Unit = {}) {
+    private val remoteContains: (String) -> Boolean = { false }, private val ensure: (String) -> Unit = {}, private val includeHistory: Boolean = false) {
     private data class Version(val source: ConflictSource, val index: MisqFile.Index, val key: String)
     private data class Cached(val stamp: NoteFileStamp, val version: Version)
     private val cache = mutableMapOf<String, Cached>()
@@ -25,7 +25,9 @@ internal class NoteConflicts(private val notes: File, private val state: File,
         cache[path]?.takeIf { stamp.identity != null && it.stamp == stamp }?.let { return it.version.copy(source = source) }
         val reader = MisqFile(source.file, readOnlyAlias = true)
         val index = reader.index()
-        val key = reader.contentKey()
+        val history = if (includeHistory) ":" + NotebookArchive.digest((index.events.sortedBy { it.version }.joinToString { it.copy(parents = it.parents.sorted()).toString() } +
+            index.records.toSortedMap().entries.joinToString { it.key + ":" + it.value.hash }).toByteArray(Charsets.UTF_8)) else ""
+        val key = reader.contentKey() + history
         return Version(source, index, key).also { cache[path] = Cached(stamp, it) }
     }
     private fun opened(): JSONObject = if (!imports.exists()) JSONObject() else JSONObject(String(NoteFiles.readEnvelope(imports), Charsets.UTF_8))
@@ -86,7 +88,7 @@ internal class NoteConflicts(private val notes: File, private val state: File,
     }.getOrDefault(false)
 
     /** Preserve the alias and the previous committed manifest, and keep local entry IDs stable. */
-    @Synchronized fun autoMerge(conflict: NoteConflict): NoteManifest? {
+    @Synchronized fun autoMerge(conflict: NoteConflict, committed: (NoteManifest) -> Unit = {}): NoteManifest? {
         if (conflict.provisional) return null
         val (original, alias) = mergeSources(conflict)
         val local = MisqFile(original)
@@ -103,6 +105,7 @@ internal class NoteConflicts(private val notes: File, private val state: File,
             check(version(ConflictSource(alias, conflict.filename)).key == conflict.key) { AppMessages.text(R.string.conflict_version_changed) }
             if (!AppendOnlyMerge.canMerge(a, b)) return null
             if (b.manifest.strokes.size <= a.manifest.strokes.size) {
+                committed(a.manifest)
                 markOpened(conflict, a.manifest.info.id)
                 return a.manifest
             }
@@ -119,6 +122,7 @@ internal class NoteConflicts(private val notes: File, private val state: File,
             }
             val index = merged.copy(manifest = merged.manifest.copy(strokes = refs, nextId = next), entities = entities)
             local.rewrite(index, remote)
+            committed(index.manifest)
             markOpened(conflict, index.manifest.info.id)
             return index.manifest
         } finally { cache.remove(snapshot.absolutePath); snapshot.delete() }

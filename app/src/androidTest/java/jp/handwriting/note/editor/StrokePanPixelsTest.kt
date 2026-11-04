@@ -29,7 +29,7 @@ class StrokePanPixelsTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val brush = Brush.createWithColorIntArgb(StockBrushes.marker(), Color.BLACK, 3f, 0.1f)
         fun stroke() = EditorStroke(Stroke(brush, MutableStrokeInputBatch().add(InputToolType.STYLUS, 10f, 10f, 0)))
-        val red = stroke(); val blue = stroke()
+        val red = stroke(); val blue = stroke(); val green = stroke()
         val cache = StrokeRenderCache()
         var entries = listOf(1L to red)
         var position = ViewPosition()
@@ -43,10 +43,13 @@ class StrokePanPixelsTest {
                         canvas.drawColor(Color.WHITE)
                         cache.draw(canvas, entries, position, width, height, WorldPoint(0f, 0f), { false }, compact) { target, entry, _ ->
                             target.save()
+                            val scale = width / Viewport.WIDTH * position.zoom
+                            target.scale(scale, scale)
                             target.translate(-position.left, -position.top)
-                            paint.color = if (entry === red) Color.RED else Color.BLUE
+                            paint.color = if (entry === red) Color.RED else if (entry === blue) Color.BLUE else Color.GREEN
                             if (entry === red) target.drawRect(10f, 900f, 50f, 1100f, paint)
-                            else target.drawRect(100f, 1000f, 140f, 1200f, paint)
+                            else if (entry === blue) target.drawRect(100f, 1000f, 140f, 1200f, paint)
+                            else target.drawRect(200f, 1100f, 240f, 1200f, paint)
                             target.restore()
                         }
                     }
@@ -94,6 +97,19 @@ class StrokePanPixelsTest {
                 checkPixel(120, 850, Color.BLUE)
                 checkPixel(30, 750, Color.RED)
                 checkPixel(30, 850, Color.WHITE)
+                val beforeResize = cache.recordedGroups
+                scenario.onActivity { view.layoutParams = view.layoutParams.apply { width = 600 } }
+                checkPixel(18, 450, Color.RED)
+                checkPixel(72, 510, Color.BLUE)
+                assertEquals("Resizing reuses the existing display lists", beforeResize, cache.recordedGroups)
+                scenario.onActivity { entries = entries + (3L to green) }
+                checkPixel(132, 510, Color.GREEN)
+                val withTail = cache.recordedGroups
+                scenario.onActivity { view.layoutParams = view.layoutParams.apply { width = 1000 } }
+                checkPixel(30, 750, Color.RED)
+                checkPixel(120, 850, Color.BLUE)
+                checkPixel(220, 850, Color.GREEN)
+                assertEquals("Base and tail recorded at different widths stay reusable", withTail, cache.recordedGroups)
             } finally { instrumentation.runOnMainSync { cache.clear() } }
         }
     }

@@ -35,5 +35,20 @@ internal fun StorageSettings(model: EditorViewModel) {
         if (location.custom) TextButton(enabled = !workspace.working, onClick = { error = null; model.changeStorage(null) }) { Text(AppMessages.text(R.string.restore_default)) }
     }
     Text(AppMessages.text(R.string.storage_help), style = MaterialTheme.typography.bodySmall)
+    if (location.format3) {
+        Text(AppMessages.text(R.string.storage_format3_enabled), style = MaterialTheme.typography.bodySmall)
+        if (location.settingsVersions.isNotEmpty()) Text(AppMessages.text(R.string.storage_settings_conflict), color = MaterialTheme.colorScheme.error)
+        location.settingsVersions.forEachIndexed { index, version ->
+            Text(AppMessages.text(R.string.storage_settings_version_summary, version.folders, version.locations), style = MaterialTheme.typography.bodySmall)
+            TextButton(enabled = !workspace.working && workspace.current == null, onClick = { model.resolveStorageSettings(version.id) }) {
+                Text(if (version.local) AppMessages.text(R.string.storage_use_local_settings) else AppMessages.text(R.string.storage_use_other_settings, index + 1))
+            }
+        }
+    } else {
+        TextButton(enabled = !workspace.working && workspace.current == null, onClick = model::migrateStorageFormat) {
+            Text(AppMessages.text(R.string.storage_migrate_format3))
+        }
+        Text(AppMessages.text(R.string.storage_migrate_format3_help), style = MaterialTheme.typography.bodySmall)
+    }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 }

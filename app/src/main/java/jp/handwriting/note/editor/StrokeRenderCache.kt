@@ -7,17 +7,14 @@ import android.graphics.RenderNode
 internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
     init { require(appendLimit in 1..GROUP_SIZE) }
     companion object { internal const val GROUP_SIZE = 64; internal const val APPEND_SIZE = 8 }
-    private data class Item(val stroke: EditorStroke, val selected: Boolean)
-    private data class RecordedNode(val node: RenderNode, val position: ViewPosition) {
+    private data class Item(val id: Long, val stroke: EditorStroke, val selected: Boolean)
+    private data class RecordedNode(val node: RenderNode, val position: ViewPosition, val scale: Float) {
         fun discard() = node.discardDisplayList()
     }
     private data class Group(val nodes: List<RecordedNode>, val items: List<Item>, val offset: WorldPoint, val tail: List<Item> = emptyList(), val scale: Float = 1f)
     private data class GroupId(val bucket: Long, val separator: Long = 0L, val star: Boolean = false)
     private val groups = mutableMapOf<GroupId, Group>()
     private var visibleGroups = emptySet<GroupId>()
-    private var viewport: ViewPosition? = null
-    private var width = 0
-    private var height = 0
     internal var recordedGroups = 0
         private set
     internal val pendingCompaction get() = groups.values.any { it.nodes.size > 1 }
@@ -37,20 +34,22 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             entries.forEach { drawStroke(canvas, it.second, selected(it.second)) }
             return
         }
-        if (viewport?.zoom != position.zoom || width != viewWidth || height != viewHeight) {
-            clear(); viewport = position; width = viewWidth; height = viewHeight
-        }
+        // Display lists contain vector drawing commands, not a viewport-sized bitmap.
+        // Reuse their complete (unclipped) strokes for pinch zoom as well as pan/resize;
+        // clearing on every zoom step re-records all visible ink on the UI thread.
         // Operation IDs are stable under erase/undo; deleting a stroke never shifts later groups.
         // Stars have individual display lists. Split surrounding normal strokes into stable runs
         // so rebuilding a returning star neither redraws its neighbours nor changes draw order.
         val sortedStars = java.util.TreeSet(starIds)
+        fun groupId(id: Long): GroupId {
+            val bucket = id / GROUP_SIZE
+            val star = id in starIds
+            val preceding = sortedStars.floor(id)?.takeIf { it / GROUP_SIZE == bucket } ?: 0L
+            return GroupId(bucket, if (star) id else preceding, star)
+        }
         val visible = linkedMapOf<GroupId, MutableList<Pair<Long, EditorStroke>>>()
         entries.forEach { entry ->
-            val bucket = entry.first / GROUP_SIZE
-            val star = entry.first in starIds
-            val preceding = sortedStars.floor(entry.first)?.takeIf { it / GROUP_SIZE == bucket } ?: 0L
-            val id = GroupId(bucket, if (star) entry.first else preceding, star)
-            visible.getOrPut(id) { mutableListOf() }.add(entry)
+            visible.getOrPut(groupId(entry.first)) { mutableListOf() }.add(entry)
         }
         val unused = groups.keys.filter { id -> id !in visible &&
             (retainedStrokes == null || groups.getValue(id).items.none { it.stroke in retainedStrokes }) }
@@ -65,13 +64,25 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
             try { items.forEach { drawStroke(recording, it.stroke, it.selected) } }
             finally { node.endRecording() }
             recordedGroups++
-            return RecordedNode(node, position)
+            return RecordedNode(node, position, viewWidth / Viewport.WIDTH * position.zoom)
         }
         for ((id, strokes) in visible) {
-            val items = strokes.map { Item(it.second, selected(it.second)) }
+            var group = groups[id]
+            val items = strokes.mapTo(ArrayList()) { Item(it.first, it.second, selected(it.second)) }
+            if (group != null && retainedStrokes != null) {
+                // Keep complete cached strokes when they cross the viewport edge. They are
+                // clipped by the parent canvas; edits and retention still evict stale geometry.
+                val present = strokes.mapTo(HashSet()) { it.first }
+                group.items.filterTo(items) { it.id !in present && it.stroke in retainedStrokes && groupId(it.id) == id }
+                items.sortBy { it.id }
+                for (i in items.indices) {
+                    val item = items[i]
+                    val isSelected = selected(item.stroke)
+                    if (item.selected != isSelected) items[i] = item.copy(selected = isSelected)
+                }
+            }
             val offset = if (items.any { it.selected }) selectionOffset else WorldPoint(0f, 0f)
             val factor = if (items.any { it.selected }) selectionScale else 1f
-            var group = groups[id]
             // Only stars get the re-entry workaround. Ordinary retained lists stay reusable.
             if (group != null && ((id.star && id !in visibleGroups) || group.nodes.any { !it.node.hasDisplayList() })) {
                 group.nodes.forEach(RecordedNode::discard)
@@ -104,6 +115,8 @@ internal class StrokeRenderCache(private val appendLimit: Int = APPEND_SIZE) {
                 canvas.save()
                 canvas.translate((recorded.position.left - position.left) * scale,
                     (recorded.position.top - position.top) * scale)
+                val resize = scale / recorded.scale
+                canvas.scale(resize, resize)
                 canvas.drawRenderNode(recorded.node)
                 canvas.restore()
             }

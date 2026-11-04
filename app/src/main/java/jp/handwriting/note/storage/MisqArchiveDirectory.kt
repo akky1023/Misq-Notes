@@ -7,6 +7,9 @@ import org.json.JSONObject
 /** One visible .misq per notebook; immutable recovery records make interrupted SAF writes safe. */
 internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDirectory {
     private val staged = linkedMapOf<String, ByteArray>()
+    // Transaction-scoped only: snapshot files outlive commit/organize, never a subsequent names().
+    private val uploaded = mutableSetOf<String>()
+    private val uploadSources = mutableMapOf<String, File>()
     private var inventory = emptySet<String>()
     private var revisions = emptyMap<String, JSONObject>()
     private var observedHead: String? = null
@@ -15,6 +18,8 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
     override fun names(): Set<String> {
         // Unpublished in-memory writes must not look like a committed generation on retry.
         staged.clear()
+        uploaded.clear()
+        uploadSources.clear()
         inventory = files.names()
         val names = inventory.filter { it.matches(REVISION_FILE) }.sortedDescending()
         if (names.size > 1 && names[0].substring(9, 29) == names[1].substring(9, 29)) throw ArchiveConflictException()
@@ -28,21 +33,24 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
     override fun read(name: String): ByteArray = staged[name] ?: if (name.startsWith("revision-")) {
         NotebookArchive.encode(refs(revisions.getValue(name)))
     } else files.read(name).also { require(NotebookArchive.digest(it) == name.removePrefix("blob-")) }
-    override fun matches(name: String, hash: String): Boolean = staged[name]?.let { NotebookArchive.digest(it) == hash }
-        ?: if (name.startsWith("blob-")) files.digest(name) == hash else super.matches(name, hash)
+    override fun matches(name: String, hash: String): Boolean = if (name in uploaded && name == "blob-$hash") true
+        else staged[name]?.let { NotebookArchive.digest(it) == hash }
+        ?: if (name.startsWith("blob-")) files.matchesNote(name, hash) else super.matches(name, hash)
     override fun write(name: String, bytes: ByteArray) {
         require(ArchiveLayout.complete(name, bytes)); staged[name] = bytes
     }
     override fun writeFile(name: String, file: File) {
         if (!file.name.endsWith(".misq") || !name.startsWith("blob-")) { write(name, file.readBytes()); return }
         require(NotebookArchive.digest(file) == name.removePrefix("blob-"))
+        uploadSources[name] = file
         // Immutable blobs may precede publication; an interrupted upload cannot become current.
         if (name in files.names()) {
-            if (files.digest(name) == name.removePrefix("blob-")) return
+            if (runCatching { files.matchesNote(name, name.removePrefix("blob-")) }.getOrDefault(false)) { uploaded += name; return }
             files.delete(name) // Repair an interrupted, invalid blob using its exact content hash.
         }
-        file.inputStream().use { files.writeStream(name, it) }
-        require(files.digest(name) == name.removePrefix("blob-"))
+        files.writeNote(name, file)
+        require(files.matchesNote(name, name.removePrefix("blob-")))
+        uploaded += name
     }
     override fun copyTo(name: String, file: File) {
         staged[name]?.let { file.writeBytes(it); return }
@@ -69,11 +77,7 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         require(files.read("$revision.json").contentEquals(bytes))
         val peers = files.names().filter { it.matches(REVISION_FILE) && it.substring(9, 29) == revision.substring(9, 29) }
         if (peers.size != 1) throw ArchiveConflictException()
-        // These names are convenient current views. The immutable JSON above is the commit point.
-        refs.filterKeys { it.endsWith(".misq") }.forEach { (path, hash) ->
-            replaceNoteView(path.substringAfterLast('/'), hash)
-        }
-        replaceView("library.json", json.toString(2).toByteArray())
+        // organize() publishes/repairs convenient views once, after this immutable commit point.
         staged.clear()
     }
     private fun replaceView(name: String, bytes: ByteArray) {
@@ -90,17 +94,28 @@ internal class MisqArchiveDirectory(private val files: PackedFiles) : ArchiveDir
         // A notebook can exceed the remaining Android heap. Compare, copy and verify
         // using bounded streams while the immutable recovery blob remains authoritative.
         val names = files.names()
-        if (name in names && files.digest(name) == hash) return
+        if (name in names && runCatching { files.matchesNote(name, hash) }.getOrDefault(false)) return
         val source = "blob-$hash"
-        require(files.digest(source) == hash)
+        if (files.publishNote(source, name, hash)) return
+        val local = uploadSources[source]?.takeIf { it.isFile }
+        if (local == null) require(files.digest(source) == hash)
         if (name in names) files.delete(name)
-        files.openRead(source).use { files.writeStream(name, it) }
+        if (local != null) {
+            // Reuse the immutable, hashed upload snapshot instead of reading the provider twice.
+            local.inputStream().use { files.writeStream(name, it) }
+        } else {
+            files.openRead(source).use { files.writeStream(name, it) }
+        }
         require(files.digest(name) == hash)
     }
     private fun checkHead() {
         if (files.names().filter { it.matches(REVISION_FILE) }.maxOrNull() != observedHead) throw ArchiveConflictException()
     }
     override fun organize() {
+        try { organizeViews() }
+        finally { uploadSources.clear(); uploaded.clear() }
+    }
+    private fun organizeViews() {
         val names = files.names()
         val commits = names.filter { it.matches(REVISION_FILE) }.sortedDescending()
         // Keep two readable complete revisions. Branches and uncommitted blobs are retained.

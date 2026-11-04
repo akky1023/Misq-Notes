@@ -16,15 +16,16 @@ internal fun File.noteStamp(): NoteFileStamp = Files.readAttributes(toPath(), ja
 
 /** Append-only payloads and two checksummed commit slots. A preview never decodes stroke data. */
 internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = false) {
-    private var cachedStamp: Pair<Long, Long>? = null
+    private var cachedStamp: NoteFileStamp? = null
     private var cachedIndexes: List<Index>? = null
+    private var cachedAllIndexes = false
     internal data class Record(val offset: Long, val size: Int, val hash: String)
     private data class Slot(val generation: Long, val index: Record, val thumbnail: Record?, val summary: Record?)
     internal data class Event(val version: String, val entity: String, val parents: List<String>,
         val blob: String?, val order: Long, val at: Long)
     internal data class Index(val generation: Long, val manifest: NoteManifest, val records: Map<String, Record>,
         val events: List<Event>, val entities: Map<Long, String>, val thumbnail: Record? = null, val thumbnailKey: String? = null,
-        val previousManifest: NoteManifest? = null)
+        val previousManifest: NoteManifest? = null, val placements: Map<String, StrokePlacement> = emptyMap())
     private val codec get() = NoteFiles(file.parentFile!!, false)
     private fun key(note: NoteManifest) = NotebookArchive.digest((note.info.paper.color.toString() + ":" +
         note.strokes.joinToString { it.storageId }).toByteArray())
@@ -52,22 +53,24 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             Slot(generation, index, if (magic == MAGIC) ref() else null, if (magic == MAGIC) ref() else null)
         }.getOrNull() }.sortedByDescending { it.generation }
     }
-    internal fun indexes(): List<Index> {
-        val stamp = file.length() to file.lastModified()
-        if (cachedStamp == stamp) cachedIndexes?.let { return it }
+    internal fun indexes(): List<Index> = readIndexes(all = true)
+    private fun readIndexes(all: Boolean): List<Index> {
+        val stamp = file.noteStamp()
+        if (cachedStamp == stamp && (!all || cachedAllIndexes)) cachedIndexes?.let { return it }
         try {
             return RandomAccessFile(file, "r").use { input ->
                 require(input.length() >= LEGACY_HEADER)
-                slots(input).mapNotNull { slot -> runCatching {
+                val parsed = slots(input).asSequence().mapNotNull { slot -> runCatching {
                     val body = record(input, slot.index)
                     val parsed = decode(JSONObject(String(body, Charsets.UTF_8)))
                     require(parsed.generation == slot.generation)
                     parsed
-                }.getOrNull() }.sortedByDescending { it.generation }.also { require(it.isNotEmpty()) }
-            }.also { cachedStamp = stamp; cachedIndexes = it }
+                }.getOrNull() }
+                (if (all) parsed else parsed.take(1)).toList().also { require(it.isNotEmpty()) }
+            }.also { cachedStamp = stamp; cachedIndexes = it; cachedAllIndexes = all }
         } catch (error: Exception) { throw IOException("Invalid Misq note: ${file.name}", error) }
     }
-    internal fun index() = indexes().first()
+    internal fun index() = readIndexes(all = false).first()
     /** Stable note content identity, excluding display preferences and disposable previews. */
     internal fun contentKey(): String {
         val index = index()
@@ -93,6 +96,15 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         val index = index()
         RandomAccessFile(file, "r").use { record(it, index.records.getValue(id)) }
     } catch (error: Exception) { throw IOException("Invalid Misq stroke: $id", error) }
+    /** Keep one descriptor/index for a full load; each payload is still checked before decoding. */
+    fun <T> readStrokes(refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> {
+        val index = index()
+        return RandomAccessFile(file, "r").use { input -> refs.map { ref ->
+            val bytes = try { record(input, index.records.getValue(ref.storageId)) }
+                catch (error: Exception) { throw IOException("Invalid Misq stroke: ${ref.storageId}", error) }
+            decode(ref, bytes)
+        } }
+    }
     fun thumbnailCurrent() = index().let { it.thumbnail != null && it.thumbnailKey == key(it.manifest) }
     fun thumbnail(): ByteArray? = RandomAccessFile(file, "r").use { input ->
         val committed = slots(input)
@@ -123,6 +135,8 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         }
         throw IOException("Invalid Misq summary")
     }
+    internal fun externalIdentity(): Pair<String, String> = summary().id to
+        RandomAccessFile(file, "r").use { slots(it).first().index.hash }
     private fun append(output: RandomAccessFile, bytes: ByteArray): Record {
         require(bytes.size <= MAX_RECORD)
         val offset = output.length().coerceAtLeast(HEADER.toLong())
@@ -145,14 +159,26 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         put(ref); put(index.thumbnail); put(summaryRef)
         val slotBody = slotData.array() + MessageDigest.getInstance("SHA-256").digest(slotData.array())
         output.seek(8L + slot * SLOT); output.write(slotBody); output.fd.sync()
-        cachedStamp = null; cachedIndexes = null
+        // Keep the index we just durably committed; the next pen lift/preview need not
+        // parse megabytes of our own JSON again. Detect replacement and fine-grained edits.
+        cachedStamp = file.noteStamp(); cachedIndexes = listOf(index); cachedAllIndexes = false
     }
     private fun open(): RandomAccessFile {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         file.parentFile!!.mkdirs()
         return RandomAccessFile(file, "rw").also { if (it.length() == 0L) { it.setLength(HEADER.toLong()); it.writeLong(MAGIC); it.fd.sync() } }
     }
-    fun save(note: NoteManifest, encode: (String) -> ByteArray) {
+    internal fun importSnapshot(manifest: NoteManifest, events: List<Event>, entities: Map<Long, String>,
+        placements: Map<String, StrokePlacement>, storageIds: Set<String>, thumbnail: ByteArray?, checkpoint: () -> Unit = {}, read: (String) -> ByteArray) {
+        check(!readOnlyAlias && !file.exists()) { "Export must not replace an existing notebook" }
+        open().use { output ->
+            val records = storageIds.associateWith { checkpoint(); append(output, read(it)) }
+            val preview = thumbnail?.let { append(output, it) }
+            commit(output, Index(1, manifest, records, events, entities, preview, if (preview != null) key(manifest) else null, placements = placements))
+        }
+        validate(checkpoint)
+    }
+    fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         upgradeLegacy()
         if (file.exists() && file.length() > 0) {
@@ -167,7 +193,10 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             val committed = RandomAccessFile(file, "r").use { input -> (0..1).any { input.seek(8L + it * SLOT); input.readLong() != 0L } }
             if (committed) throw it else null
         } else null
-        if (previous?.manifest == note) return
+        if (previous?.manifest == note && placements.all { previous.placements[it.key] == it.value }) {
+            runCatching { compactIfNeeded() }
+            return
+        }
         val events = previous?.events.orEmpty().toMutableList()
         val histories = events.groupBy { it.entity }
         var lastOrder = events.maxOfOrNull { it.order } ?: 0L
@@ -187,8 +216,11 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
             val records = previous?.records.orEmpty().toMutableMap()
             note.strokes.forEach { ref -> if (ref.storageId !in records) records[ref.storageId] = append(output, encode(ref.storageId)) }
             commit(output, Index((previous?.generation ?: 0) + 1, note, records, events, entities,
-                previous?.thumbnail, previous?.thumbnailKey, previous?.manifest))
+                previous?.thumbnail, previous?.thumbnailKey, previous?.manifest, previous?.placements.orEmpty() + placements))
         }
+        // The new content is already durable. A failed optional compaction must
+        // leave it available and must not turn a successful save into a failure.
+        runCatching { compactIfNeeded() }
     }
     /** Resolve every imported head, including rejected additions, so later sync cannot resurrect them. */
     internal fun resolve(note: NoteManifest, sources: List<MisqFile>, selectedEntities: Map<Long, String>) {
@@ -234,32 +266,40 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         val index = index()
         open().use { output -> commit(output, index.copy(generation = index.generation + 1,
             thumbnail = append(output, png), thumbnailKey = key(index.manifest))) }
+        runCatching { compactIfNeeded() }
     }
-    /** Preserve original timestamps when preparing an imported history or a test fixture. */
+    /** Adjust current heads only, leaving their ancestors intact. */
     internal fun preserveEventTimes(times: Map<String, Long>) {
         check(!readOnlyAlias)
         val current = index()
+        val heads = current.events.groupBy { it.entity }.values.flatMap(::frontier).map { it.version }.toSet()
         open().use { output -> commit(output, current.copy(generation = current.generation + 1,
-            events = current.events.map { event -> event.copy(at = times[event.entity] ?: event.at) })) }
+            events = current.events.map { event ->
+                if (event.version in heads) event.copy(at = times[event.entity] ?: event.at) else event
+            })) }
     }
     private fun upgradeLegacy() {
         if (file.exists() && file.length() >= 8 && RandomAccessFile(file, "r").use { it.readLong() == LEGACY_MAGIC }) rewrite(index())
     }
-    fun validate() {
+    fun validate(checkpoint: () -> Unit = {}) {
         val index = index()
         RandomAccessFile(file, "r").use { input ->
-            index.manifest.strokes.forEach { record(input, index.records.getValue(it.storageId)) }
+            index.records.values.forEach { checkpoint(); record(input, it) }
             index.thumbnail?.let { record(input, it) }
         }
     }
-    /** Retain tombstones/causality; only obsolete payloads and old index bodies are compacted. */
+    /** Retain both commits and their complete history; discard obsolete appended index bodies. */
     fun compactIfNeeded() {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         val index = index()
-        val live = index.records.values.sumOf { it.size.toLong() } + (index.thumbnail?.size ?: 0) +
-            encode(index).toString().toByteArray().size * 2L
-        if (file.length() <= live * 3 + 8L * 1024 * 1024) return
-        // Keep every historical blob named by an event, for conflict copies and undo after merge.
+        // Read the fixed commit slots instead of serializing megabytes of JSON
+        // on each pen lift. Count shared thumbnails only once.
+        val committed = RandomAccessFile(file, "r").use(::slots)
+        val previews = (committed.mapNotNull { it.thumbnail } + listOfNotNull(index.thumbnail)).distinct()
+        val live = HEADER + index.records.values.sumOf { it.size.toLong() } + previews.sumOf { it.size.toLong() } +
+            committed.sumOf { it.index.size.toLong() + (it.summary?.size ?: 0) }
+        val obsolete = file.length() - live
+        if (obsolete < 8L * 1024 * 1024 || obsolete < file.length() / 4) return
         rewrite(index)
     }
     internal fun rewrite(index: Index, other: MisqFile? = null) {
@@ -268,26 +308,46 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         temporary.delete()
         try {
             val target = MisqFile(temporary)
-            target.open().use { output ->
-                val needed = index.events.mapNotNull { it.blob }.toSet() + index.manifest.strokes.map { it.storageId }
-                val mine = if (file.exists()) index() else null
-                val previous = if (other == null) indexes().getOrNull(1) else mine
-                val records = needed.associateWith { id ->
-                    val bytes = if (mine?.records?.containsKey(id) == true) stroke(id) else checkNotNull(other).stroke(id)
-                    target.append(output, bytes)
+            val mine = if (file.exists()) index() else null
+            val previous = if (other == null) indexes().getOrNull(1) else mine
+            // Compaction changes layout only. Preserve every record in either
+            // commit, including deleted strokes and the previous recovery state.
+            val needed = if (other == null) index.records.keys + previous?.records.orEmpty().keys
+                else index.events.mapNotNull { it.blob }.toSet() + index.manifest.strokes.map { it.storageId } + previous?.records.orEmpty().keys
+            val localRecords = previous?.records.orEmpty() + mine?.records.orEmpty()
+            previous?.records.orEmpty().forEach { (id, ref) -> mine?.records?.get(id)?.let {
+                require(it.hash == ref.hash && it.size == ref.size) { "Conflicting immutable stroke record" }
+            } }
+            val remoteRecords = other?.index()?.records.orEmpty()
+            RandomAccessFile(file, "r").use { local ->
+                other?.let { RandomAccessFile(it.file, "r") }.use { remote ->
+                    target.open().use { output ->
+                        val records = needed.associateWith { id ->
+                            val bytes = localRecords[id]?.let { record(local, it) }
+                                ?: record(checkNotNull(remote), remoteRecords.getValue(id))
+                            target.append(output, bytes)
+                        }
+                        val copiedPreviews = mutableMapOf<Record, Record>()
+                        fun preview(ref: Record?): Record? = if (other == null && ref != null)
+                            copiedPreviews.getOrPut(ref) { target.append(output, record(local, ref)) } else null
+                        val thumb = preview(index.thumbnail)
+                        previous?.let { prior ->
+                            val priorThumbnail = preview(prior.thumbnail)
+                            target.commit(output, prior.copy(generation = 1, records = records, thumbnail = priorThumbnail,
+                                thumbnailKey = if (priorThumbnail != null) prior.thumbnailKey else null))
+                        }
+                        target.commit(output, index.copy(generation = if (previous == null) 1 else 2, records = records, thumbnail = thumb,
+                            thumbnailKey = if (thumb != null) index.thumbnailKey else null))
+                    }
                 }
-                val thumb = if (other == null) thumbnail()?.let { target.append(output, it) } else null
-                previous?.let { prior ->
-                    val priorThumbnail = if (other == null) prior.thumbnail?.let { ref ->
-                        RandomAccessFile(file, "r").use { target.append(output, record(it, ref)) }
-                    } else null
-                    target.commit(output, prior.copy(generation = 1, records = records, thumbnail = priorThumbnail,
-                        thumbnailKey = if (priorThumbnail != null) prior.thumbnailKey else null))
-                }
-                target.commit(output, index.copy(generation = if (previous == null) 1 else 2, records = records, thumbnail = thumb,
-                    thumbnailKey = if (thumb != null) index.thumbnailKey else null))
             }
-            target.validate()
+            // Verify both indexes and all historical bytes before replacing the
+            // source, not just the strokes visible in the latest manifest.
+            val rewritten = target.indexes()
+            check(rewritten.size == if (previous == null) 1 else 2)
+            RandomAccessFile(temporary, "r").use { input ->
+                (rewritten.flatMap { it.records.values + listOfNotNull(it.thumbnail) }).distinct().forEach { target.record(input, it) }
+            }
             Files.move(temporary.toPath(), file.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
             cachedStamp = null; cachedIndexes = null
         } finally { temporary.delete() }
@@ -302,6 +362,9 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         .put("thumbnail", index.thumbnail?.let(::recordJson) ?: JSONObject.NULL)
         .put("thumbnailKey", index.thumbnailKey ?: JSONObject.NULL)
         .put("previousManifest", index.previousManifest?.let { Base64.getEncoder().encodeToString(codec.encodeManifest(it)) } ?: JSONObject.NULL)
+        .put("placements", JSONObject().also { values -> index.placements.forEach { (id, p) ->
+            values.put(id, JSONArray().put(p.startY).put(p.top).put(p.bottom))
+        } })
     private fun recordJson(ref: Record) = JSONObject().put("offset", ref.offset).put("size", ref.size).put("sha256", ref.hash)
     private fun recordJson(obj: JSONObject) = Record(obj.getLong("offset"), obj.getInt("size"), obj.getString("sha256")).also {
         require(it.offset >= LEGACY_HEADER && it.size in 0..MAX_RECORD && it.hash.matches(Regex("[a-f0-9]{64}")))
@@ -329,7 +392,11 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         return Index(obj.getLong("generation"), note, records, events, entities,
             if (obj.isNull("thumbnail")) null else recordJson(obj.getJSONObject("thumbnail")),
             if (obj.isNull("thumbnailKey")) null else obj.getString("thumbnailKey"),
-            if (obj.isNull("previousManifest")) null else codec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))))
+            if (obj.isNull("previousManifest")) null else codec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))),
+            obj.optJSONObject("placements")?.let { values -> values.keys().asSequence().associate { id ->
+                val value = values.getJSONArray(id)
+                uuid(id) to StrokePlacement(value.getDouble(0).toFloat(), value.getDouble(1).toFloat(), value.getDouble(2).toFloat())
+            } }.orEmpty())
     }
     companion object {
         private const val LEGACY_MAGIC = 0x4D49535130303031L

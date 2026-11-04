@@ -30,9 +30,12 @@ internal interface ArchiveDirectory {
 
 /** Snapshots can own disk copies instead of retaining whole notebooks in the Android heap. */
 internal class ArchiveBlob private constructor(private val memory: ByteArray?, private val file: File?,
-    private val remoteHash: String? = null, private val fetch: ((File) -> Unit)? = null, private val temporary: File? = null) {
+    private val remoteHash: String? = null, private val fetch: ((File) -> Unit)? = null, private val temporary: File? = null,
+    val changes: BlockChanges.Capture? = null) {
     constructor(bytes: ByteArray) : this(bytes, null)
     constructor(file: File) : this(null, file)
+    constructor(file: File, hash: String) : this(null, file, hash)
+    constructor(file: File, hash: String, changes: BlockChanges.Capture?) : this(null, file, hash, changes = changes)
     constructor(hash: String, temporary: File, fetch: (File) -> Unit) : this(null, null, hash, fetch, temporary)
     private fun <T> materialize(block: (File) -> T): T {
         file?.let { return block(it) }
@@ -41,6 +44,7 @@ internal class ArchiveBlob private constructor(private val memory: ByteArray?, p
     }
     val bytes: ByteArray get() = memory ?: materialize { it.readBytes() }
     val size: Long get() = memory?.size?.toLong() ?: file?.length() ?: Long.MAX_VALUE
+    val localFile: File? get() = file
     val hash = remoteHash ?: memory?.let(NotebookArchive::digest) ?: NotebookArchive.digest(file!!)
     fun copyTo(target: File) {
         if (file != null) {
@@ -54,7 +58,8 @@ internal class ArchiveBlob private constructor(private val memory: ByteArray?, p
 }
 
 /** A private disk copy stays immutable while editing continues; the owner removes it after sync. */
-internal class ArchiveSnapshot(private val root: File, private val blobs: Map<String, ArchiveBlob>) :
+internal class ArchiveSnapshot(private val root: File, private val blobs: Map<String, ArchiveBlob>,
+    val sources: Map<String, Pair<File, NoteFileStamp>>) :
     AbstractMap<String, ArchiveBlob>(), Closeable {
     override val entries get() = blobs.entries
     override fun close() { root.deleteRecursively() }
@@ -63,11 +68,16 @@ internal class ArchiveSnapshot(private val root: File, private val blobs: Map<St
             val root = File(files.values.first().parentFile, ".notes-snapshot-${UUID.randomUUID()}")
             check(root.mkdirs())
             try {
+                val sources = files.mapValues { (_, source) -> source to source.noteStamp() }
                 return ArchiveSnapshot(root, references + files.mapValues { (path, source) ->
+                    val changes = if (path.endsWith(".misq")) BlockChanges.capture(source) else null
                     val copy = File(root, path).also { it.parentFile!!.mkdirs() }
-                    source.copyTo(copy)
-                    ArchiveBlob(copy)
-                })
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    java.security.DigestInputStream(source.inputStream(), digest).use { input ->
+                        copy.outputStream().use { input.copyTo(it, 65536) }
+                    }
+                    ArchiveBlob(copy, NotebookArchive.hex(digest.digest()), changes)
+                }, sources)
             } catch (error: Throwable) { root.deleteRecursively(); throw error }
         }
     }
@@ -234,10 +244,12 @@ internal class NotebookArchive(private val directory: ArchiveDirectory) {
                 if (count < 0) break
                 digest.update(buffer, 0, count)
             }
-            digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+            hex(digest.digest())
         }
         fun digest(bytes: ByteArray): String {
-            val hash = MessageDigest.getInstance("SHA-256").digest(bytes)
+            return hex(MessageDigest.getInstance("SHA-256").digest(bytes))
+        }
+        internal fun hex(hash: ByteArray): String {
             return CharArray(hash.size * 2).also { chars -> hash.forEachIndexed { i, byte ->
                 val value = byte.toInt() and 255
                 chars[i * 2] = HEX[value ushr 4]; chars[i * 2 + 1] = HEX[value and 15]

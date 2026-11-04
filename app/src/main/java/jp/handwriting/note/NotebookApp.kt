@@ -65,7 +65,13 @@ fun NotebookApp(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCan
                 if (state.working) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f)).pointerInput(Unit) {
                         awaitPointerEventScope { while (true) awaitPointerEvent().changes.forEach { it.consume() } }
-                    }, contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    }, contentAlignment = Alignment.Center) {
+                        Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                            CircularProgressIndicator()
+                            Text(AppMessages.text(state.workingMessage), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
                 }
                 MergeReviewDialog(model)
             }

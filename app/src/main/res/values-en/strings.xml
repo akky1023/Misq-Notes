@@ -1,5 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="storage_migrate_format3">Migrate to the new storage format</string>
+    <string name="export_notebook_file">Export notebook file (.misq)</string>
+    <string name="storage_settings_conflict">Folder, paper or pen settings conflict. Both versions have been retained. Choose the settings to use.</string>
+    <string name="storage_use_local_settings">Use settings from this device</string>
+    <string name="storage_use_other_settings">Use settings from saved version %1$s</string>
+    <string name="storage_settings_version_summary">%1$s folders, %2$s notebook locations</string>
+    <string name="storage_migrate_format3_help">Close the notebook before migrating. Original data and an independent rollback copy are retained. The new format is read back and verified before switching. All devices sharing this library must use a version that supports the new format.</string>
+    <string name="storage_migrating">Verifying the rollback copy and new storage format</string>
+    <string name="storage_format3_enabled">Using the new storage format. Original data and the migration rollback copy are retained.</string>
+    <string name="loading_note">Loading note</string>
+    <string name="loading_region">Loading this area</string>
     <string name="storage_conflict">The storage location also has changes. Both versions are preserved. Choose another empty location to save the version on this device.</string>
     <string name="storage_incoming">Updates were downloaded. Reopen the app to apply them.</string>
     <string name="lasso_free">Free</string>
@@ -286,4 +297,10 @@
     <string name="merge_provisional_version">Latest (%1$s)</string>
     <string name="conflict_provisional_help">The most recently updated version is shown provisionally. It is saved when you save an edit or confirm the merge.</string>
     <string name="note_provisional">Conflicts</string>
+    <string name="operation_processing">Processing</string>
+    <string name="operation_loading_library">Loading note list</string>
+    <string name="operation_loading_settings">Loading settings</string>
+    <string name="operation_preparing_note">Preparing note</string>
+    <string name="operation_syncing">Syncing to external storage</string>
+    <string name="operation_changing_storage">Changing storage location</string>
 </resources>

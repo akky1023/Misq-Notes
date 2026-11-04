@@ -9,6 +9,26 @@ import org.junit.rules.TemporaryFolder
 
 class NoteConflictsTest {
     @get:Rule val temp = TemporaryFolder()
+    @Test fun userDeletionRemovesAllVersionsWithOrWithoutAnOriginalAndPreservesOtherNotes() {
+        for (missingOriginal in listOf(false, true)) {
+            val (files, note, store) = setup()
+            val a = alias(files, note, "renamed.misq")
+            val b = alias(files, note, "${UUID.randomUUID()}.misq", 8)
+            val unrelated = files.create("keep")
+            val unrelatedFile = files.document(unrelated.info.id).file
+            val before = unrelatedFile.readBytes()
+            if (missingOriginal) files.delete(note.info.id)
+            val repository = NoteRepository(files)
+            assertTrue(repository.list().any { it.id == note.info.id })
+            repository.delete(note.info.id)
+            assertFalse(a.exists())
+            assertFalse(b.exists())
+            assertFalse(repository.list().any { it.id == note.info.id })
+            assertTrue(store.scan().isEmpty())
+            assertEquals(listOf(unrelated.info.id), NoteRepository(NoteFiles(unrelatedFile.parentFile!!)).list().map { it.id })
+            assertArrayEquals(before, unrelatedFile.readBytes())
+        }
+    }
     private fun setup(): Triple<NoteFiles, NoteManifest, NoteConflicts> {
         val root = temp.newFolder()
         val files = NoteFiles(root)

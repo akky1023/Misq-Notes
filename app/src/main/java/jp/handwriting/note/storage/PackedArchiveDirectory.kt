@@ -13,6 +13,9 @@ internal interface PackedFiles {
     fun read(name: String): ByteArray
     fun openRead(name: String): InputStream = ByteArrayInputStream(read(name))
     fun writeStream(name: String, input: InputStream) = write(name, input.readBytes())
+    fun writeNote(name: String, file: File) { file.inputStream().use { writeStream(name, it) } }
+    fun matchesNote(name: String, hash: String): Boolean = digest(name) == hash
+    fun publishNote(source: String, target: String, hash: String): Boolean = false
     fun digest(name: String): String = openRead(name).use { input ->
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(8192)

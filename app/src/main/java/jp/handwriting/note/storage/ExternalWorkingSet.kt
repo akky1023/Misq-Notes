@@ -11,6 +11,7 @@ import org.json.JSONObject
 
 /** Only hashes, deletion intents and rebuildable list metadata survive a successful external save. */
 internal class ExternalWorkingSet(private val directory: File, val tree: String,
+    private val spatialReader: ((String) -> SpatialNoteCache.Source?)? = null,
     private val fetch: (String, File) -> Unit) : NoteBacking {
     private val state = File(directory, ".notes-external-state")
     private val catalog = File(directory, ".notes-external-catalog")
@@ -21,6 +22,10 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
     private val deleted = mutableSetOf<String>()
     private val cached = mutableMapOf<String, Pair<String, NoteSummary>>()
     private val checkedPreviews = mutableSetOf<String>()
+    // Repeated switches reuse a bounded, verified index; payloads are still checked on read.
+    private val spatialSources = object : LinkedHashMap<String, SpatialNoteCache.Source>(4, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SpatialNoteCache.Source>?) = size > 2
+    }
     var available = false
 
     init {
@@ -64,6 +69,15 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         NoteFiles.atomicWrite(catalog, json.toString().toByteArray())
     }
     override fun contains(id: String) = path(id) in baseline && id !in deleted
+    override fun spatial(id: String): SpatialNoteCache.Source? {
+        if (!available || !contains(id)) return null
+        val hash = baseline.getValue(path(id))
+        spatialSources[hash]?.let { return it }
+        return spatialReader?.invoke(hash)?.also {
+            require(it.manifest.info.id == id)
+            if (it.manifest.strokes.size <= 20_000) spatialSources[hash] = it
+        }
+    }
     fun isDeleted(path: String) = noteId(path)?.let { it in deleted } == true
     override fun ensure(id: String) {
         val target = File(root, "${validId(id)}.misq")
@@ -111,16 +125,20 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         // A deletion made after the captured save must remain pending.
         deleted.removeAll { path(it) !in files }
         baseline = files.toMap()
+        spatialSources.keys.retainAll(baseline.values.toSet())
         save()
     }
-    fun rebuildCatalog() {
+    fun rebuildCatalog(captured: Map<String, ArchiveBlob> = emptyMap()) {
         baseline.forEach { (path, hash) ->
             val id = noteId(path) ?: return@forEach
             if (id in deleted || cached[id]?.first == hash) return@forEach
             val local = File(root, "$id.misq")
             val temporary = File(directory, ".notes-catalog-${UUID.randomUUID()}.misq")
             try {
-                val source = if (local.exists() && NotebookArchive.digest(local) == hash) local else temporary.also {
+                // The immutable upload snapshot is already hashed. Live edits may have advanced
+                // since capture; do not download the just-uploaded older body in that case.
+                val source = captured[path]?.takeIf { it.hash == hash }?.localFile
+                    ?: if (local.exists() && NotebookArchive.digest(local) == hash) local else temporary.also {
                     fetch(hash, it); check(NotebookArchive.digest(it) == hash)
                 }
                 val document = MisqFile(source, readOnlyAlias = true)
@@ -150,7 +168,7 @@ internal class ExternalWorkingSet(private val directory: File, val tree: String,
         baseline.forEach { (path, hash) ->
             val id = noteId(path) ?: return@forEach
             val file = File(root, "$id.misq")
-            if (id != active && id !in deleted && cached[id]?.first == hash && file.isFile && NotebookArchive.digest(file) == hash)
+            if (id != active && id !in deleted && !PartialNoteJournal.exists(root, id) && cached[id]?.first == hash && file.isFile && NotebookArchive.digest(file) == hash)
                 check(file.delete()) { "Unable to release saved notebook working copy" }
         }
     }

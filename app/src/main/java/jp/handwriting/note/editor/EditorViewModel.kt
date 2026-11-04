@@ -37,14 +37,20 @@ data class EditorUi(
     val canUndo: Boolean = false,
     val canRedo: Boolean = false,
     val contentRevision: Long = 0,
+    val loadingRegion: Boolean = false,
+    val loadingRest: Boolean = false,
+    val partialContent: Boolean = false,
 )
 class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageRecord?, val storageId: String) {
     constructor(ink: Stroke, storageId: String = UUID.randomUUID().toString()) : this(ink, null, storageId)
     constructor(image: ImageRecord, storageId: String = UUID.randomUUID().toString()) : this(null, image, storageId)
     val ink: Stroke get() = checkNotNull(inkOrNull)
-    val bounds: Box? = image?.let { androidx.ink.geometry.ImmutableBox.fromTwoPoints(
+    val bounds: Box? by lazy { image?.let { androidx.ink.geometry.ImmutableBox.fromTwoPoints(
         androidx.ink.geometry.ImmutableVec(it.left, it.top), androidx.ink.geometry.ImmutableVec(it.left + it.width, it.top + it.height))
-    } ?: inkOrNull?.shape?.computeBoundingBox()
+    } ?: inkOrNull?.shape?.computeBoundingBox() }
+    internal val placement: StrokePlacement get() = bounds.let { box ->
+        StrokePlacement(image?.top ?: ink.inputs[0].y, box?.yMin ?: 0f, box?.yMax ?: 0f)
+    }
     internal fun translated(dx: Float, dy: Float): EditorStroke {
         image?.let { return EditorStroke(it.translated(dx, dy)) }
         val moved = MutableStrokeInputBatch()
@@ -59,6 +65,7 @@ class EditorStroke private constructor(val inkOrNull: Stroke?, val image: ImageR
 }
 data class WorkspaceUi(
     val current: NoteInfo? = null, val notes: List<NoteSummary> = emptyList(),
+    val workingMessage: Int = R.string.operation_processing,
     val working: Boolean = false, val saving: Boolean = false, val error: String? = null,
     val recovered: Boolean = false,
     val saveFailed: Boolean = false,
@@ -69,7 +76,8 @@ internal data class PaletteUi(val colors: List<Int> = SavedColors.defaults, val 
 internal data class ToolPreferencesUi(val value: ToolPreferences = ToolPreferences(), val saving: Boolean = false, val error: String? = null)
 internal data class LibraryUi(val value: LibraryPreferences = LibraryPreferences(), val saving: Boolean = false, val error: String? = null)
 internal data class SelectionOverlay(val left: Float, val top: Float, val right: Float, val bottom: Float, val enabled: Boolean, val canCapture: Boolean = true)
-internal data class StorageLocationUi(val label: String = AppMessages.text(R.string.storage_default), val custom: Boolean = false)
+internal data class StorageLocationUi(val label: String = AppMessages.text(R.string.storage_default), val custom: Boolean = false, val format3: Boolean = false,
+    val settingsVersions: List<SettingsVersion> = emptyList())
 internal data class ConflictsUi(val items: List<NoteConflict> = emptyList(), val error: String? = null, val opening: Boolean = false)
 internal data class MergeReviewUi(val conflict: NoteConflict? = null, val session: MergeReviewSession? = null,
     val loading: Boolean = false, val saving: Boolean = false, val error: String? = null,
@@ -102,7 +110,7 @@ class EditorViewModel : ViewModel() {
     private val mutableLibrary = MutableStateFlow(LibraryUi())
     internal val library = mutableLibrary.asStateFlow()
     private var librarySaves: SaveQueue<LibraryPreferences>? = null
-    internal val contentBottom get() = index.bottom
+    internal val contentBottom get() = maxOf(index.bottom, if (lazyBase != null) lazyBottom else 0f)
     private var penColor = mutableUi.value.color
     private var penSize = mutableUi.value.size
     private var selectionWorking = false
@@ -125,9 +133,33 @@ class EditorViewModel : ViewModel() {
     internal var canvasRevision = 0L
         private set
     private var repository: NoteRepository? = null
-    private data class PendingSave(val info: NoteInfo, val nextId: Long, val entries: List<OrderedEdits.Entry<EditorStroke>>)
+    private data class PendingSave(val info: NoteInfo, val nextId: Long, val entries: List<OrderedEdits.Entry<EditorStroke>>,
+        val baseRefs: List<StrokeRef> = emptyList(), val hydrated: Set<Long> = emptySet(), val addedSince: Long = Long.MAX_VALUE,
+        val changes: Map<Long, Long> = emptyMap())
+    private val strokeChanges = mutableMapOf<Long, Long>()
+    private var strokeChangeVersion = 0L
+    private var applyingRead = false
+    private var sessionStartId = Long.MAX_VALUE
+    private var lazyBase: NoteManifest? = null
+    private var lazyBottom = 0f
+    private val hydrated = mutableSetOf<Long>()
+    private var regionJob: kotlinx.coroutines.Job? = null
+    private var regionRun = 0L
+    private var backgroundLoadJob: kotlinx.coroutines.Job? = null
+    private var backgroundRun = 0L
+    private var backgroundLoading = false
+    private var regionLoading = false
+    internal var viewportGestureActive = false
+    private var regionFailed = false
+    private var regionTop = Float.NaN
+    private var regionBottom = Float.NaN
+    private var hydratingAll = false
+    private var initialAspect = 2f
     private var saves: SaveQueue<PendingSave>? = null
     private var previewSaves: SaveQueue<NoteSnapshot>? = null
+    private var viewPositions: NoteViewPositions? = null
+    private var positionSaves: SaveQueue<Pair<String, ViewPosition>>? = null
+    private var lastPosition: Pair<String, ViewPosition>? = null
     private var restoring = false
     private var lastRevision = -1L
     private var starting = false
@@ -145,25 +177,28 @@ class EditorViewModel : ViewModel() {
     private var mergeJob: kotlinx.coroutines.Job? = null
     private var mergeToken = 0L
     private var mergeCache: File? = null
-    internal fun configureStorage(context: android.content.Context) {
-        mergeCache = File(context.cacheDir, "merge-reviews")
-        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(context.cacheDir, "conflict-sources"))
+    internal fun configureStorage(context: android.content.Context, directory: File = context.filesDir, cache: File = context.cacheDir) {
+        initialAspect = context.resources.displayMetrics.let { it.heightPixels.toFloat() / it.widthPixels.coerceAtLeast(1) }
+        mergeCache = File(cache, "merge-reviews")
+        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(cache, "conflict-sources"))
         if (notebookStorage == null) {
-            notebookStorage = NotebookStorage(context.applicationContext, context.filesDir, viewModelScope)
+            notebookStorage = NotebookStorage(context.applicationContext, directory, viewModelScope)
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
                 val custom = notebookStorage!!.uri != null
                 mutableWorkspace.value = mutableWorkspace.value.copy(syncing = custom && state.saving,
                     syncError = state.error?.takeIf { custom }?.let { AppMessages.text(R.string.save_failed, it) })
+                refreshStorageLocation()
             } }
         }
         refreshStorageLocation()
     }
     private fun refreshStorageLocation() {
-        notebookStorage?.let { mutableStorageLocation.value = StorageLocationUi(it.label, it.uri != null) }
+        notebookStorage?.let { mutableStorageLocation.value = StorageLocationUi(it.label, it.uri != null, it.usesImmutable, it.settingsVersions) }
         if (notebookStorage?.uri == null) mutableWorkspace.value = mutableWorkspace.value.copy(syncing = false, syncError = null)
     }
     private var closing = false
-    private data class SaveStamp(val note: String, val revision: Long, val position: ViewPosition, val color: Int, val size: Float, val paper: NotePaper)
+    // Viewport changes are saved locally and never make a note dirty.
+    private data class SaveStamp(val note: String, val revision: Long, val color: Int, val size: Float, val paper: NotePaper)
     private var lastStamp: SaveStamp? = null
     private var lastGeneration: Long? = null
     var onCanvasChange: (() -> Unit)? = null
@@ -174,6 +209,10 @@ class EditorViewModel : ViewModel() {
     init {
         edits.onChange = ::publish
         edits.onContentChange = { added, removed ->
+            if (repository?.usesImmutable == true && !restoring && !applyingRead) {
+                val version = ++strokeChangeVersion
+                (added + removed).forEach { strokeChanges[it.id] = version }
+            }
             canvasRevision++
             val selectedIds = selection.keys.toSet()
             removed.forEach { index.remove(it.id) }
@@ -192,16 +231,25 @@ class EditorViewModel : ViewModel() {
         conflictStore = NoteConflicts(File(directory, "notes"), File(directory, "conflicts"),
             remoteContains = { notebookStorage?.contains(it) == true }, ensure = { notebookStorage?.ensure(it) })
         starting = true
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.operation_loading_library)
         viewModelScope.launch {
             try {
                 val needsRemote = withContext(Dispatchers.IO) { notebookStorage?.initialize() == true }
                 if (needsRemote) notebookStorage?.initializeRemote()
+                refreshStorageLocation()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
+                workMessage(R.string.operation_loading_settings)
+                viewPositions = NoteViewPositions(File(directory, "view-positions"))
+                positionSaves = SaveQueue(viewModelScope, batchMillis = 500) { (id, position) ->
+                    withContext(Dispatchers.IO) { viewPositions!!.write(id, position) }
+                }
                 repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
                     NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
+                val noteDirectory = notebookStorage?.noteFiles()?.directory ?: File(directory, "notes")
+                conflictStore = NoteConflicts(noteDirectory, File(directory, "conflicts"),
+                    remoteContains = { notebookStorage?.contains(it) == true }, ensure = { notebookStorage?.ensure(it) }, includeHistory = notebookStorage?.usesImmutable == true)
                 val libraryFile = LibraryPreferencesFile(File(directory, "library.hwp"))
                 try { mutableLibrary.value = LibraryUi(withContext(Dispatchers.IO) { libraryFile.read() }) }
                 catch (e: Exception) { mutableLibrary.value = LibraryUi(error = AppMessages.text(R.string.library_load_failed, e.localizedMessage)) }
@@ -235,16 +283,34 @@ class EditorViewModel : ViewModel() {
                 previewSaves = SaveQueue(viewModelScope, batchMillis = 1000) { snapshot -> withContext(Dispatchers.IO) {
                     repository!!.updatePreview(snapshot)
                 } }
-                saves = SaveQueue(viewModelScope, batchMillis = 500) { request -> withContext(Dispatchers.IO) {
-                    val refs = request.entries.map { StrokeRef(it.id, it.value.storageId) }
-                    val snapshot = NoteSnapshot(NoteManifest(request.info, refs, request.nextId), request.entries)
-                    repository!!.save(snapshot)
-                    previewSaves?.request(snapshot)
-                } }
+                notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
+                notebookStorage?.afterExternalSave = {
+                    // Serialize eviction with repository reads, after provider IO has finished.
+                    // Cleanup failure must not turn a successful external save into a failed one.
+                    withContext(Dispatchers.IO) {
+                        runCatching { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
+                            .onFailure { android.util.Log.w("MisqStorage", "Saved working copies could not be released", it) }
+                    }
+                }
+                saves = SaveQueue(viewModelScope, batchMillis = 500) { request ->
+                    val immutable = repository!!.usesImmutable
+                    val saved = withContext(Dispatchers.IO) {
+                        val entries = if (immutable) request.entries.filter { it.id in request.changes } else request.entries
+                        val refs = ((if (immutable) emptyList() else request.baseRefs.filter { it.id !in request.hydrated }) +
+                            entries.map { StrokeRef(it.id, it.value.storageId) }).sortedBy { it.id }
+                        val snapshot = NoteSnapshot(NoteManifest(request.info, refs, request.nextId), entries,
+                            if (immutable) request.changes.keys else null, if (immutable) Long.MAX_VALUE else request.addedSince)
+                        repository!!.save(snapshot)
+                        snapshot
+                    }
+                    if (immutable) request.changes.forEach { (id, version) -> if (strokeChanges[id] == version) strokeChanges.remove(id) }
+                    previewSaves?.request(if (immutable) saved.copy(entries = request.entries) else saved)
+                }
                 launch { saves!!.state.collect { state ->
                     mutableWorkspace.value = mutableWorkspace.value.copy(saving = state.saving, saveFailed = state.error != null,
                         error = if (state.error != null) AppMessages.text(R.string.save_failed, state.error) else mutableWorkspace.value.error?.takeUnless { mutableWorkspace.value.saveFailed })
                 } }
+                workMessage(R.string.operation_loading_library)
                 refreshList()
                 notebookStorage?.startBackground()
             } catch (e: Exception) { fail(e) }
@@ -255,8 +321,10 @@ class EditorViewModel : ViewModel() {
         val notes = withContext(Dispatchers.IO) { repository!!.list() }
         val ids = notes.map { it.id }.toSet()
         val before = mutableLibrary.value.value
-        val locations = before.locations.filterKeys { it in ids }
-        val orders = before.orders.mapValues { (folder, order) -> order.filter { it in ids && locations[it].orEmpty() == folder } }
+        val deleted = if (repository!!.usesImmutable) withContext(Dispatchers.IO) { notebookStorage?.deletedNoteIds().orEmpty() } else emptySet()
+        fun retained(id: String) = if (repository!!.usesImmutable) id !in deleted else id in ids
+        val locations = before.locations.filterKeys(::retained)
+        val orders = before.orders.mapValues { (folder, order) -> order.filter { retained(it) && locations[it].orEmpty() == folder } }
         if (locations != before.locations || orders != before.orders) updateLibrary(before.copy(locations = locations, orders = orders))
         mutableWorkspace.value = mutableWorkspace.value.copy(notes = notes, working = false)
         refreshConflicts()
@@ -269,7 +337,7 @@ class EditorViewModel : ViewModel() {
         conflictScan = viewModelScope.launch {
             try {
                 val items = withContext(Dispatchers.IO) {
-                    val external = tree?.let { conflictDocuments?.scan(it) }.orEmpty()
+                    val external = if (notebookStorage?.usesImmutable == true) emptyList() else tree?.let { conflictDocuments?.scan(it) }.orEmpty()
                     val pending = File(directory, ".notes-incoming/notes").listFiles().orEmpty()
                         .filter { it.isFile && it.extension == "misq" }.map { ConflictSource(it) }
                     store.scan(external + pending)
@@ -290,7 +358,7 @@ class EditorViewModel : ViewModel() {
                                 remaining += item
                                 continue
                             }
-                            mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+                            beginWork(clearError = false)
                             val merged = try { withContext(Dispatchers.IO) { repository!!.autoMergeConflict(store, item) } }
                             finally { mutableWorkspace.value = mutableWorkspace.value.copy(working = false) }
                             if (merged == null) remaining += item else changed = true
@@ -316,7 +384,7 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.working || mutableUi.value.busy || closing || mutableConflicts.value.opening) return
         val store = conflictStore ?: return
         mutableConflicts.value = mutableConflicts.value.copy(opening = true, error = null)
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+        beginWork(R.string.saving, clearError = false)
         viewModelScope.launch {
             try {
                 conflictScan?.join()
@@ -324,11 +392,13 @@ class EditorViewModel : ViewModel() {
                     val generation = enqueueSave(force = true)
                     check(generation == null || saves!!.await(generation)) { AppMessages.text(R.string.wait_note) }
                 }
+                workMessage(R.string.loading_note)
                 val title = AppMessages.text(R.string.conflict_copy_title, conflict.title)
                 val loaded = withContext(Dispatchers.IO) {
                     val manifest = repository!!.copyConflict(store, conflict, title)
                     repository!!.load(manifest.info.id).also { store.markOpened(conflict, manifest.info.id) }
                 }
+                workMessage(R.string.operation_preparing_note)
                 enter(loaded)
                 mutableConflicts.value = mutableConflicts.value.copy(items = mutableConflicts.value.items.filterNot { it.key == conflict.key }, opening = false)
             } catch (e: Exception) {
@@ -354,7 +424,10 @@ class EditorViewModel : ViewModel() {
                     check(generation == null || saves!!.await(generation)) { AppMessages.text(R.string.wait_note) }
                     check(!mutableUi.value.busy && edits.revision == revision) { AppMessages.text(R.string.wait_note) }
                 }
-                val provisional = withContext(Dispatchers.IO) { store.missingWorkingCopy(conflict.noteId) }
+                val provisional = withContext(Dispatchers.IO) {
+                    repository!!.prepareMergePrimary(conflict.noteId)
+                    store.missingWorkingCopy(conflict.noteId)
+                }
                 val available = (listOf(conflict) + mutableConflicts.value.items.filter { it.noteId == conflict.noteId }).distinctBy { it.key }.map { it.copy(provisional = provisional) }
                 val latest = available.minWith(conflictVersionOrder)
                 val base = if (provisional) latest else conflict.copy(provisional = false)
@@ -379,7 +452,7 @@ class EditorViewModel : ViewModel() {
                         finally { restoring = false }
                         mutableWorkspace.value = mutableWorkspace.value.copy(current = automatic.manifest.info)
                         lastRevision = edits.revision
-                        lastStamp = SaveStamp(automatic.manifest.info.id, edits.revision, viewport.position, penColor, penSize, automatic.manifest.info.paper)
+                        lastStamp = SaveStamp(automatic.manifest.info.id, edits.revision, penColor, penSize, automatic.manifest.info.paper)
                         publish()
                     }
                     mutableWorkspace.value = mutableWorkspace.value.copy(notes = withContext(Dispatchers.IO) { repository!!.list() })
@@ -430,7 +503,7 @@ class EditorViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val loaded = withContext(Dispatchers.IO) {
-                    val manifest = repository!!.saveMerge { session.saveResolved(it, strength, decisions, title) }
+                    val manifest = repository!!.saveMerge(session.conflicts.map { it.file }) { session.saveResolved(it, strength, decisions, title) }
                     repository!!.load(manifest.info.id).also { session.conflicts.forEach { conflict -> conflictStore!!.markOpened(conflict, manifest.info.id) } }
                 }
                 enter(loaded)
@@ -450,7 +523,7 @@ class EditorViewModel : ViewModel() {
     internal fun changeStorage(uri: android.net.Uri?) {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
         val storage = notebookStorage ?: return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 librarySaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_library) } }
@@ -458,7 +531,9 @@ class EditorViewModel : ViewModel() {
                 paletteSaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_palette) } }
                 preferenceSaves?.let { check(it.await(it.state.value.latest) || uri == null) { AppMessages.text(R.string.wait_pen) } }
                 if (uri != null && !storage.blockedByRemoteChange) check(storage.awaitSync()) { AppMessages.text(R.string.wait_note) }
+                workMessage(R.string.operation_changing_storage)
                 withContext(Dispatchers.IO) { storage.change(uri) }
+                workMessage(R.string.operation_loading_library)
                 if (storage.recovered) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
                 refreshStorageLocation()
                 if (uri == null) {
@@ -487,9 +562,43 @@ class EditorViewModel : ViewModel() {
             } catch (e: Exception) { fail(e) }
         }
     }
+    internal fun migrateStorageFormat() {
+        val storage = notebookStorage ?: return
+        val directory = storageDirectory ?: return
+        if (mutableWorkspace.value.working || mutableWorkspace.value.current != null || storage.usesImmutable) return
+        beginWork(R.string.storage_migrating)
+        viewModelScope.launch {
+            try {
+                check(saves?.flush() != false && librarySaves?.flush() != false && paletteSaves?.flush() != false && preferenceSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
+                previewSaves?.flush()
+                val context = currentCoroutineContext()
+                storage.migrateFormat3 { context.ensureActive() }
+                repository = withContext(Dispatchers.IO) { NoteRepository(storage.noteFiles(), persist = { storage.write(it) }) }
+                conflictStore = NoteConflicts(storage.noteFiles().directory, File(directory, "conflicts"),
+                    remoteContains = storage::contains, ensure = storage::ensure, includeHistory = true)
+                refreshStorageLocation(); refreshList()
+            } catch (e: Exception) { fail(e) }
+        }
+    }
+    internal fun resolveStorageSettings(id: String) {
+        val storage = notebookStorage ?: return; val directory = storageDirectory ?: return
+        if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
+        beginWork(R.string.saving)
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    storage.resolveSettingsVersion(id)
+                    savedPalettes = SavedColors(File(directory, "palette.hwp")).read()
+                }
+                mutableLibrary.value = LibraryUi(withContext(Dispatchers.IO) { LibraryPreferencesFile(File(directory, "library.hwp")).read() })
+                mutablePreferences.value = ToolPreferencesUi(withContext(Dispatchers.IO) { ToolPreferencesFile(File(directory, "tools.hwp")).read() })
+                refreshPalette(); refreshStorageLocation(); refreshList()
+            } catch (e: Exception) { fail(e) }
+        }
+    }
     fun createNote(title: String, folder: String? = null) {
         if (mutableWorkspace.value.working || repository == null) return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 val manifest = withContext(Dispatchers.IO) { repository!!.create(title.trim().ifEmpty { AppMessages.text(R.string.untitled) }, mutableLibrary.value.value.paper) }
@@ -497,23 +606,44 @@ class EditorViewModel : ViewModel() {
                     updateLibrary(mutableLibrary.value.value.moved(manifest.info.id, folder))
                     librarySaves?.let { check(it.await(it.state.value.latest)) { AppMessages.text(R.string.folder_save_failed) } }
                 }
+                workMessage(R.string.operation_preparing_note)
                 enter(LoadedNote(manifest, emptyList(), false))
             } catch (e: Exception) { fail(e) }
         }
     }
     fun openNote(id: String) {
         if (mutableWorkspace.value.working || repository == null) return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        stopBackgroundLoading(); regionJob?.cancel()
+        beginWork(R.string.loading_note)
         viewModelScope.launch {
-            try { notebookStorage?.keepOpen(id); enter(withContext(Dispatchers.IO) { repository!!.load(id) }) }
+            try {
+                val (loaded, position) = withContext(Dispatchers.IO) {
+                    val position = viewPositions?.read(id)
+                    notebookStorage?.keepOpen(id)
+                    repository!!.loadVisible(id,
+                        if (viewport.width > 1f) viewport.height / viewport.width else initialAspect, position) to position
+                }
+                workMessage(R.string.operation_preparing_note)
+                enter(loaded, position)
+            }
             catch (e: Exception) { fail(e) }
         }
     }
-    private fun enter(note: LoadedNote) {
+    private fun enter(note: LoadedNote, position: ViewPosition? = null) {
+        stopBackgroundLoading()
+        regionRun++
+        regionJob?.cancel()
+        lazyBase = note.manifest.takeIf { note.partial }
+        sessionStartId = note.manifest.nextId
+        strokeChanges.clear()
+        lazyBottom = note.contentBottom
+        hydrated.clear(); hydrated.addAll(note.entries.map { it.id })
+        hydratingAll = false; regionLoading = false; regionFailed = false; regionTop = Float.NaN; regionBottom = Float.NaN
         notebookStorage?.keepOpen(note.manifest.info.id)
         restoring = true
         resetButton()
-        viewport.restore(note.manifest.info.position)
+        viewport.restore(position ?: note.manifest.info.position)
+        lastPosition = note.manifest.info.id to viewport.position
         clearSelection()
         penColor = note.manifest.info.color; penSize = PenStyle.displayWidth(note.manifest.info.size)
         paletteTool = EditorTool.PEN; refreshPalette()
@@ -522,59 +652,74 @@ class EditorViewModel : ViewModel() {
         edits.restore(note.entries, note.manifest.nextId)
         lastRevision = edits.revision
         mutableWorkspace.value = mutableWorkspace.value.copy(current = note.manifest.info, working = false, error = null, recovered = note.recovered)
-        lastStamp = if (note.recovered) null else SaveStamp(note.manifest.info.id, edits.revision, viewport.position, mutableUi.value.color, mutableUi.value.size, note.manifest.info.paper)
+        lastStamp = if (note.recovered) null else SaveStamp(note.manifest.info.id, edits.revision, mutableUi.value.color, mutableUi.value.size, note.manifest.info.paper)
         lastGeneration = null
         restoring = false
         publish()
+        startBackgroundLoading()
     }
     fun closeNote() {
         if (mutableWorkspace.value.working) return
+        saveViewportPosition()
         closing = true
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true)
+        stopBackgroundLoading()
+        regionJob?.cancel()
+        beginWork(R.string.saving, clearError = false)
         viewModelScope.launch {
             try {
-                check(!mutableUi.value.busy) { AppMessages.text(R.string.wait_stroke_back) }
+                check(!edits.busy && !selectionWorking && !selectionGesture) { AppMessages.text(R.string.wait_stroke_back) }
                 val generation = enqueueSave(force = true, allowClosing = true)
-                if (generation != null && !saves!!.await(generation)) {
+                if (generation != null && !saves!!.flush(generation)) {
                     mutableWorkspace.value = mutableWorkspace.value.copy(working = false)
                     closing = false
+                    startBackgroundLoading()
                     return@launch
                 }
-                preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
-                paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.await(queue.state.value.latest) }
-                previewSaves?.let { it.await(it.state.value.latest) }
-                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                check(positionSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
+                preferenceSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
+                paletteSaves?.let { queue -> if (queue.state.value.latest > 0) queue.flush() }
+                // Local queues are durable now; external publication continues independently.
+                workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) {
                     notebookStorage?.keepOpen(null)
-                    repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() }
                 }
                 restoring = true
                 mutableWorkspace.value = mutableWorkspace.value.copy(current = null, recovered = false)
+                regionJob?.cancel()
+                lazyBase = null; hydrated.clear(); hydratingAll = false; regionLoading = false; regionFailed = false
                 closing = false
                 edits.restore(emptyList()); restoring = false
                 refreshList()
-            } catch (e: Exception) { restoring = false; closing = false; fail(e) }
+            } catch (e: Exception) { restoring = false; closing = false; fail(e); startBackgroundLoading() }
         }
     }
     fun renameNote(id: String, title: String) = listAction { repository!!.rename(id, title.trim().ifEmpty { AppMessages.text(R.string.untitled) }) }
     fun deleteNote(id: String) = listAction { repository!!.delete(id) }
     private fun listAction(action: () -> Unit) {
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
-        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+        beginWork(R.string.saving)
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) { action() }
-                check(notebookStorage?.awaitSync() != false) { AppMessages.text(R.string.wait_note) }
+                workMessage(R.string.operation_loading_library)
                 withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 refreshList()
             } catch (e: Exception) { fail(e) }
         }
     }
+    private fun beginWork(message: Int = R.string.operation_processing, clearError: Boolean = true) {
+        mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = if (clearError) null else mutableWorkspace.value.error,
+            workingMessage = message)
+    }
+    private fun workMessage(message: Int) {
+        mutableWorkspace.value = mutableWorkspace.value.copy(
+            workingMessage = message)
+    }
     private fun fail(e: Exception) { mutableWorkspace.value = mutableWorkspace.value.copy(working = false, error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed)) }
     fun clearError() { mutableWorkspace.value = mutableWorkspace.value.copy(error = null, recovered = false) }
     fun retrySave() {
         viewModelScope.launch {
-            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true) }
+            try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; enqueueSave(force = true); requestVisibleRegion(); startBackgroundLoading() }
             catch (e: Exception) { fail(e) }
         }
     }
@@ -582,11 +727,20 @@ class EditorViewModel : ViewModel() {
         if (mutableWorkspace.value.current != null) retrySave()
         else if (repository == null) storageDirectory?.let(::start)
         else {
-            mutableWorkspace.value = mutableWorkspace.value.copy(working = true, error = null)
+            beginWork()
             viewModelScope.launch { try { withContext(Dispatchers.IO) { notebookStorage?.retryPending() }; refreshList() } catch (e: Exception) { fail(e) } }
         }
     }
-    fun viewportChanged() { updateViewportOverlay(); enqueueSave(force = true) }
+    fun viewportChanged() { updateViewportOverlay(); saveViewportPosition() }
+    private fun saveViewportPosition() {
+        val id = mutableWorkspace.value.current?.id ?: return
+        val queue = positionSaves ?: return
+        if (restoring || closing || mutableWorkspace.value.working) return
+        val value = id to viewport.position
+        if (value == lastPosition && queue.state.value.error == null) return
+        lastPosition = value
+        queue.request(value)
+    }
     internal fun moveViewportFromPreview(left: Float, top: Float) {
         if (mutableUi.value.busy || mutableWorkspace.value.working || !left.isFinite() || !top.isFinite()) return
         viewport.restore(viewport.position.copy(left = left.coerceAtLeast(0f), top = top.coerceAtLeast(0f)))
@@ -604,7 +758,6 @@ class EditorViewModel : ViewModel() {
         if (viewport.position.zoom != zoom) { clearSelection(); mutableZoomInteraction.value++ }
         onCanvasChange?.invoke(); viewportChanged()
     }
-    fun visibleStrokes(): List<EditorStroke> = visibleStrokeEntries().map { it.second }
     internal fun visibleStrokeEntries(): List<Pair<Long, EditorStroke>> {
         val visible = index.query(StrokeIndex.Bounds(viewport.position.left, viewport.position.top, viewport.right, viewport.bottom))
         if (selection.isEmpty()) return visible
@@ -629,7 +782,8 @@ class EditorViewModel : ViewModel() {
         val queue = saves ?: return null
         val info = mutableWorkspace.value.current ?: return null
         if (restoring || (closing && !allowClosing) || edits.busy || (!force && lastRevision == edits.revision)) return null
-        val stamp = SaveStamp(info.id, edits.revision, viewport.position, penColor, penSize, info.paper)
+        saveViewportPosition()
+        val stamp = SaveStamp(info.id, edits.revision, penColor, penSize, info.paper)
         if (stamp == lastStamp && queue.state.value.error == null) return if (force) lastGeneration else null
         val entries = edits.snapshot()
         val updated = info.copy(updatedAt = System.currentTimeMillis(), position = viewport.position,
@@ -637,7 +791,7 @@ class EditorViewModel : ViewModel() {
         mutableWorkspace.value = mutableWorkspace.value.copy(current = updated, saving = true)
         lastRevision = edits.revision
         lastStamp = stamp
-        return queue.request(PendingSave(updated, edits.nextEntryId, entries)).also { lastGeneration = it }
+        return queue.request(PendingSave(updated, edits.nextEntryId, entries, lazyBase?.strokes.orEmpty(), hydrated.toSet(), sessionStartId, strokeChanges.toMap())).also { lastGeneration = it }
     }
 
     internal suspend fun importDocument(context: android.content.Context, uri: android.net.Uri, noteId: String,
@@ -649,7 +803,7 @@ class EditorViewModel : ViewModel() {
         currentCoroutineContext().ensureActive()
         check(mutableWorkspace.value.current?.id == note.id && !edits.busy && !selectionWorking)
         clearSelection()
-        val top = maxOf(viewport.position.top, if (edits.snapshot().isEmpty()) 0f else contentBottom + 24f)
+        val top = maxOf(viewport.position.top, if (edits.snapshot().isEmpty() && lazyBase == null) 0f else contentBottom + 24f)
         var y = top
         val content = images.map { data ->
             val height = Viewport.WIDTH * data.height / data.width
@@ -877,7 +1031,7 @@ class EditorViewModel : ViewModel() {
     }
     internal fun cancelSelectionMove() { selectionOffset = WorldPoint(0f, 0f); selectionScale = 1f; selectionGesture = false; publish() }
     internal fun beginSpaceInsertion(y: Float): Boolean {
-        if (mutableUi.value.busy || !y.isFinite()) return false
+        if (mutableUi.value.busy || lazyBase != null || !y.isFinite()) return false
         clearSelection()
         // A stroke crossing the insertion line moves as a whole; never cut handwriting.
         edits.snapshot().filter { (it.value.bounds?.yMax ?: Float.NEGATIVE_INFINITY) >= y }
@@ -931,10 +1085,22 @@ class EditorViewModel : ViewModel() {
         check(!mutableUi.value.busy) { AppMessages.text(R.string.wait_stroke_action) }
         return selection.toSortedMap().values.toList()
     }
+    internal suspend fun exportNotebookFile(id: String, target: File) {
+        if (mutableWorkspace.value.current?.id == id) {
+            check(!mutableUi.value.busy && !closing) { AppMessages.text(R.string.wait_stroke_export) }
+            val generation = enqueueSave(force = true)
+            check(generation == null || saves!!.flush(generation)) { AppMessages.text(R.string.wait_note) }
+        }
+        withContext(Dispatchers.IO) {
+            val context = currentCoroutineContext()
+            checkNotNull(repository).exportNotebook(id, target) { context.ensureActive() }
+        }
+    }
     internal suspend fun exportSnapshot(id: String): NoteSnapshot {
         val info = mutableWorkspace.value.current
         if (info?.id == id) {
             check(!mutableUi.value.busy && !closing) { AppMessages.text(R.string.wait_stroke_export) }
+            hydrateAll()
             val entries = edits.snapshot()
             return NoteSnapshot(NoteManifest(info, entries.map { StrokeRef(it.id, it.value.storageId) }, edits.nextEntryId), entries)
         }
@@ -966,6 +1132,130 @@ class EditorViewModel : ViewModel() {
         mutableZoomPercent.value = viewport.zoomPercent
         mutableVisibleRegion.value = StrokeIndex.Bounds(viewport.position.left, viewport.position.top, viewport.right, viewport.bottom)
         updateSelectionOverlay()
+        requestVisibleRegion()
+    }
+    private fun hydrateRead(entries: List<OrderedEdits.Entry<EditorStroke>>) {
+        applyingRead = true
+        try { edits.hydrate(entries) } finally { applyingRead = false }
+    }
+    private fun requestVisibleRegion() {
+        val base = lazyBase ?: return
+        // Loading marks the editor busy. Starting it between finger samples would
+        // cancel the pan/pinch and restore the gesture's original viewport.
+        if (restoring || closing || hydratingAll || viewportGestureActive) return
+        val top = (viewport.position.top - 500f).coerceAtLeast(0f)
+        val bottom = viewport.bottom + 500f
+        if (regionTop == top && regionBottom == bottom) return
+        regionTop = top; regionBottom = bottom
+        stopBackgroundLoading()
+        val run = ++regionRun
+        regionJob?.cancel()
+        regionLoading = true; regionFailed = false
+        mutableUi.value = mutableUi.value.copy(loadingRegion = true, busy = true, canUndo = false, canRedo = false)
+        regionJob = viewModelScope.launch {
+            try {
+                do {
+                    val requestedTop = regionTop; val requestedBottom = regionBottom
+                    val loaded = hydrated.toSet()
+                    val needed = withContext(Dispatchers.IO) { repository!!.regionPending(base.info.id, requestedTop, requestedBottom, loaded) }
+                    if (needed) {
+                        regionLoading = true; publish()
+                        val entries = withContext(Dispatchers.IO) {
+                            val context = currentCoroutineContext()
+                            repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) { context.ensureActive() }
+                        }
+                        while (edits.busy) kotlinx.coroutines.delay(16)
+                        if (lazyBase !== base || closing) return@launch
+                        val added = entries.filter { it.id !in hydrated }
+                        hydrated.addAll(added.map { it.id }); hydrateRead(added)
+                        if (base.strokes.size == hydrated.size) lazyBase = null
+                    }
+                } while (requestedTop != regionTop || requestedBottom != regionBottom)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { regionFailed = true; fail(e) }
+            finally { if (regionRun == run && (lazyBase === base || mutableWorkspace.value.current?.id == base.info.id)) {
+                regionLoading = false; publish()
+                if (regionFailed) { regionTop = Float.NaN; regionBottom = Float.NaN }
+                else if (!closing && lazyBase === base) startBackgroundLoading()
+            } }
+        }
+    }
+    private suspend fun hydrateAll() {
+        val base = lazyBase ?: return
+        hydratingAll = true
+        stopBackgroundLoading()
+        try {
+            regionJob?.cancel(); regionJob?.join()
+            regionLoading = true; publish()
+            while (hydrated.size < base.strokes.size) {
+                val loaded = hydrated.toSet()
+                val entries = withContext(Dispatchers.IO) {
+                    val context = currentCoroutineContext()
+                    repository!!.loadNextRegion(base.info.id, Float.NEGATIVE_INFINITY, Float.POSITIVE_INFINITY, loaded) { context.ensureActive() }
+                }
+                check(entries.isNotEmpty()) { "Referenced notebook content is missing" }
+                for (batch in entries.chunked(128)) {
+                    while (edits.busy) kotlinx.coroutines.delay(16)
+                    check(lazyBase === base && !closing) { AppMessages.text(R.string.wait_note) }
+                    val added = batch.filter { it.id !in hydrated }
+                    hydrated.addAll(added.map { it.id }); hydrateRead(added)
+                    kotlinx.coroutines.yield()
+                }
+            }
+            lazyBase = null
+        } finally { hydratingAll = false; regionLoading = false; publish() }
+    }
+    private fun stopBackgroundLoading() {
+        backgroundRun++
+        backgroundLoadJob?.cancel(); backgroundLoadJob = null
+        backgroundLoading = false
+    }
+    private fun startBackgroundLoading() {
+        val base = lazyBase ?: return
+        if (closing || hydratingAll || backgroundLoadJob?.isActive == true) return
+        stopBackgroundLoading()
+        val run = backgroundRun
+        backgroundLoading = true
+        backgroundLoadJob = viewModelScope.launch {
+            try {
+                kotlinx.coroutines.delay(100) // Present the initial viewport before prefetch work.
+                val context = currentCoroutineContext()
+                fun active() = backgroundRun == run && lazyBase === base && !closing
+                fun interacting() = viewportGestureActive || edits.busy || selectionWorking || selectionGesture || insertingSpace ||
+                    regionJob?.isActive == true || hydratingAll
+                while (active()) {
+                    while (active() && interacting()) kotlinx.coroutines.delay(20)
+                    if (!active()) break
+                    val loaded = hydrated.toSet()
+                    val height = (viewport.bottom - viewport.position.top).coerceAtLeast(1000f)
+                    val top = (viewport.position.top - height).coerceAtLeast(0f)
+                    val bottom = viewport.bottom + height
+                    val entries = withContext(Dispatchers.IO) {
+                        repository!!.loadNextRegion(base.info.id, top, bottom, loaded) { context.ensureActive() }
+                    }
+                    if (!active()) break
+                    if (entries.isEmpty()) break // Unread distant regions remain referenced, never assumed empty.
+                    for (batch in entries.chunked(128)) {
+                        while (active() && interacting()) kotlinx.coroutines.delay(16)
+                        if (!active()) return@launch
+                        val added = batch.filter { it.id !in hydrated }
+                        hydrated.addAll(added.map { it.id }); hydrateRead(added)
+                        if (base.strokes.size == hydrated.size) lazyBase = null
+                        kotlinx.coroutines.delay(16)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { if (backgroundRun == run && lazyBase === base) fail(e) }
+            finally { if (backgroundRun == run) { backgroundLoading = false; publish() } }
+        }
+        publish()
+    }
+    internal fun prepareSpaceInsertion(y: Float, ready: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try { hydrateAll(); ready(beginSpaceInsertion(y)) }
+            catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: Exception) { fail(e); ready(false) }
+        }
     }
     fun brushForPressure(supported: Boolean) = if (supported) brush else fixedWidthBrush
     fun buttonChanged() = publish()
@@ -1010,11 +1300,14 @@ class EditorViewModel : ViewModel() {
         mutableUi.value = mutableUi.value.copy(
             temporaryEraser = penButton.held,
             temporaryLasso = penButton.lassoHeld,
-            strokes = edits.entries.size,
-            contentRevision = edits.revision,
-            busy = edits.busy || selectionWorking || selectionGesture,
-            canUndo = edits.canUndo && !selectionWorking && !selectionGesture,
-            canRedo = edits.canRedo && !selectionWorking && !selectionGesture,
+            strokes = edits.entries.size + (lazyBase?.strokes?.size?.minus(hydrated.size) ?: 0),
+            contentRevision = canvasRevision,
+            loadingRegion = regionLoading,
+            loadingRest = backgroundLoading,
+            partialContent = lazyBase != null,
+            busy = edits.busy || selectionWorking || selectionGesture || regionLoading || regionFailed,
+            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
+            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
             selectionCount = selection.size,
         )
         updateViewportOverlay()
