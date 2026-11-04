@@ -47,6 +47,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.ceil
 
 internal class PreviewDocument(val bottom: Float, val rows: List<StarPreviewRows.Row>,
@@ -65,8 +68,10 @@ internal fun NotePreview(model: EditorViewModel, modifier: Modifier = Modifier, 
         if (!renderContent) return@LaunchedEffect
         // Hydration publishes frequently. Finish each snapshot instead of restarting a debounce
         // (and the first preview) until the entire note has arrived.
-        snapshotFlow { ui.contentRevision to ui.busy }.conflate().collect {
-            if (ui.busy) return@collect
+        // Finishing a viewport read alone does not change the preview document.
+        val changes = snapshotFlow { ui.contentRevision to ui.busy }
+            .filter { !it.second }.map { it.first }.distinctUntilChanged().conflate()
+        changes.collect {
             val entries = model.edits.snapshot()
             val strokes = entries.map { it.value }
             val bottom = maxOf(1000f, model.contentBottom + 24f)
