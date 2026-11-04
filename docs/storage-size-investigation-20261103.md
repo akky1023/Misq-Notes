@@ -60,7 +60,7 @@
 | recovery容量 | 1,659,193,221 B（1,582.33 MiB） | 529,225,735 B（504.71 MiB） |
 | 削除した古い本文 | — | 87個・1,129,967,486 B（1,077.62 MiB） |
 
-削除した本文も含めて全ファイルをPCバックアップに保持している。`files.json`はバックアップ全件のサイズとSHA-256、`approved-plan.json`と`deleted.json`は対象一覧、`cleanup-result.json`は整理結果、`ui-after-cleanup.xml`と`reopened-hashes.txt`は再起動後の確認結果である。元の外部ノート11冊と本番APKは更新していない。今後作られる復旧コピーの自動回収は未実装なので、利用に伴って再び容量は増え得る。
+削除した本文も含めて全ファイルをPCバックアップに保持している。`files.json`はバックアップ全件のサイズとSHA-256、`approved-plan.json`と`deleted.json`は対象一覧、`cleanup-result.json`は整理結果、`ui-after-cleanup.xml`と`reopened-hashes.txt`は再起動後の確認結果である。元の外部ノート11冊と本番APKは更新していない。その後、単一端末で使う保存先向けの[復旧コピーの自動整理](recovery-cleanup.md)を検証版へ追加した。初期状態はオフで、本番APKには未適用である。
 
 ## 既存コピーの実測
 
