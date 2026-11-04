@@ -2,7 +2,7 @@ package jp.handwriting.note.editor
 
 import kotlin.math.floor
 
-/** Vertical buckets select visible candidates without walking the entire notebook each frame. */
+/** Main-thread index: vertical buckets avoid walking the entire notebook each frame. */
 class StrokeIndex<T : Any> {
     data class Bounds(val left: Float, val top: Float, val right: Float, val bottom: Float)
     private class Item<T>(val id: Long, val value: T, val bounds: Bounds, val buckets: LongRange?) {
@@ -39,6 +39,7 @@ class StrokeIndex<T : Any> {
         }
         val version = ++queryVersion
         val ids = ArrayList<Long>()
+        // A stroke can span several buckets. Visit it once without allocating a set per frame.
         fun collect(item: Item<T>) {
             if (item.queryVersion == version) return
             item.queryVersion = version

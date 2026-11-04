@@ -758,7 +758,6 @@ class EditorViewModel : ViewModel() {
         if (viewport.position.zoom != zoom) { clearSelection(); mutableZoomInteraction.value++ }
         onCanvasChange?.invoke(); viewportChanged()
     }
-    fun visibleStrokes(): List<EditorStroke> = visibleStrokeEntries().map { it.second }
     internal fun visibleStrokeEntries(): List<Pair<Long, EditorStroke>> {
         val visible = index.query(StrokeIndex.Bounds(viewport.position.left, viewport.position.top, viewport.right, viewport.bottom))
         if (selection.isEmpty()) return visible
