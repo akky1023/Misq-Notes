@@ -40,10 +40,9 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val strokeToView = Matrix()
     private val viewToStroke = Matrix()
     private var scale = 1f
-    private val renderer = InkStrokeRenderer.create()
+    private val renderer = InkStrokeRenderer.createForDisplay()
     // Recoloring a shared mesh for the flash must not modify resources in completed display lists.
     private val flashRenderer = InkStrokeRenderer.create()
-    private val strokeFidelity = StrokeFidelityCache()
     private val strokeCache = StrokeRenderCache(renderAppendLimit)
     private data class RetentionState(val revision: Long, val position: ViewPosition, val width: Int,
         val height: Int, val mode: StrokeCacheMode, val selectionOffset: WorldPoint)
@@ -155,7 +154,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         }
         retainedStrokes = entries.map { it.second }.toSet()
         val retainedInk = retainedStrokes.mapNotNull { it.inkOrNull }
-        strokeFidelity.retainVisible(retainedInk)
+        renderer.retainVisible(retainedInk)
         if (mode == StrokeCacheMode.NEARBY || mode == StrokeCacheMode.ALL) {
             val visibleInk = visible.mapNotNull { it.second.inkOrNull }.toSet()
             val pending = retainedInk.filter { it !in visibleInk }
@@ -163,7 +162,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 delay(300)
                 for (stroke in pending) {
                     while (pointerId != null || fingerStart != null || model.edits.busy) delay(100)
-                    withContext(Dispatchers.Default) { strokeFidelity.prefetch(stroke) }
+                    withContext(Dispatchers.Default) { renderer.prefetch(stroke) }
                     yield()
                 }
             }
@@ -195,7 +194,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 target.concat(strokeToView)
                 if (selected) target.translate(model.selectionOffset.x, model.selectionOffset.y)
                 if (entry.image != null) EmbeddedImages.draw(target, if (selected) entry.image.resized(model.selectionScale) else entry.image)
-                else renderer.draw(target, strokeFidelity.get(entry.ink), strokeToView)
+                else renderer.draw(target, entry.ink, strokeToView)
                 target.restore()
             }
             if (compact && strokeCache.pendingCompaction) postOnAnimation(compactStrokes)
@@ -470,7 +469,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         starFlashes.clear()
         retentionState = null; retainedStrokes = emptySet()
         strokeCache.clear()
-        strokeFidelity.clear()
+        renderer.clear()
         if (model.onCanvasChange === changeListener) model.onCanvasChange = null
         super.onDetachedFromWindow()
     }

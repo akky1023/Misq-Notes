@@ -11,11 +11,14 @@ internal data class LocalStrokeGeometry(val stroke: Stroke, val x: Float, val y:
 
 internal object StrokeLocalCoordinates {
     @OptIn(ExperimentalInkCustomBrushApi::class)
-    fun create(source: Stroke): LocalStrokeGeometry {
+    fun create(source: Stroke, epsilon: Float = source.brush.epsilon): LocalStrokeGeometry {
         if (source.inputs.isEmpty()) return LocalStrokeGeometry(source, 0f, 0f)
+        val brush = if (epsilon < source.brush.epsilon) source.brush.copy(epsilon = epsilon) else source.brush
         val first = source.inputs[0]
         val pressures = smoothedPressures(source)
-        if (first.x == 0f && first.y == 0f && pressures == null) return LocalStrokeGeometry(source, 0f, 0f)
+        if (first.x == 0f && first.y == 0f && pressures == null) {
+            return LocalStrokeGeometry(if (brush === source.brush) source else Stroke(brush, source.inputs), 0f, 0f)
+        }
         val inputs = MutableStrokeInputBatch()
         for (i in 0 until source.inputs.size) {
             val p = source.inputs[i]
@@ -23,7 +26,7 @@ internal object StrokeLocalCoordinates {
                 p.strokeUnitLengthCm, pressures?.get(i) ?: p.pressure, p.tiltRadians, p.orientationRadians)
         }
         inputs.setNoiseSeed(source.inputs.getNoiseSeed())
-        return LocalStrokeGeometry(Stroke(source.brush, inputs), first.x, first.y)
+        return LocalStrokeGeometry(Stroke(brush, inputs), first.x, first.y)
     }
 
     @OptIn(ExperimentalInkCustomBrushApi::class)

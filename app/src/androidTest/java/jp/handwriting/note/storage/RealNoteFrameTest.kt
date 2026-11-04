@@ -32,6 +32,8 @@ class RealNoteFrameTest {
     private class Samples {
         val total = mutableListOf<Long>()
         val draw = mutableListOf<Long>()
+        val gpu = mutableListOf<Long>()
+        val command = mutableListOf<Long>()
         val intervals = mutableListOf<Long>()
         var dropped = 0
     }
@@ -42,6 +44,7 @@ class RealNoteFrameTest {
         }
         report("FRAMES $name total ${stats(samples.total)} droppedMetrics=${samples.dropped}")
         report("FRAMES $name draw ${stats(samples.draw)}")
+        report("FRAMES $name gpu ${stats(samples.gpu)} command ${stats(samples.command)}")
         report("FRAMES $name vsync ${stats(samples.intervals)} missed60=${samples.intervals.count { it > 25_000_000L }}")
     }
 
@@ -89,6 +92,8 @@ class RealNoteFrameTest {
                         active.get()?.let { samples -> synchronized(samples) {
                             samples.total += metrics.getMetric(FrameMetrics.TOTAL_DURATION)
                             samples.draw += metrics.getMetric(FrameMetrics.DRAW_DURATION)
+                            samples.gpu += metrics.getMetric(FrameMetrics.GPU_DURATION)
+                            samples.command += metrics.getMetric(FrameMetrics.COMMAND_ISSUE_DURATION)
                             samples.dropped += dropped
                         } }
                     }, Handler(thread.looper))
