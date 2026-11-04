@@ -1,12 +1,16 @@
 package jp.handwriting.note.storage
 
 import android.content.Context
+import android.content.ContextWrapper
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Rect
+import android.view.PixelCopy
 import android.net.Uri
 import android.os.*
 import android.view.Choreographer
 import android.view.FrameMetrics
 import android.view.MotionEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
@@ -22,7 +26,6 @@ import jp.handwriting.note.AppMessages
 import jp.handwriting.note.PerformanceActivity
 import jp.handwriting.note.NotebookApp
 import jp.handwriting.note.NotebookTheme
-import jp.handwriting.note.R
 import jp.handwriting.note.editor.*
 import kotlinx.coroutines.*
 import org.json.JSONObject
@@ -62,8 +65,12 @@ class RealNoteFrameTest {
         require(UUID.fromString(note).toString() == note)
         val context = instrumentation.targetContext
         check(context.packageName == "net.neomenia.misqnotes.probe"); AppMessages.configure(context)
-        val preferences = context.getSharedPreferences("note-storage", Context.MODE_PRIVATE)
-        val saved = preferences.all.toMap()
+        val preferenceName = "frame-storage-${UUID.randomUUID()}"
+        val isolatedContext = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int) =
+                super.getSharedPreferences(if (name == "note-storage") preferenceName else name, mode)
+        }
         val folder = File(context.cacheDir, "frame-test-${UUID.randomUUID()}").also { check(it.mkdirs()) }
         val models = ViewModelStore()
         var model: EditorViewModel? = null
@@ -78,10 +85,9 @@ class RealNoteFrameTest {
             Format3Library(store, File(folder, "exports").also { it.mkdirs() }).imported(source)
             NoteFiles.atomicWrite(File(folder, ".format3-active"), JSONObject().put("format", 3).put("minWriter", 3)
                 .put("directory", store.directory.name).toString().toByteArray())
-            check(preferences.edit().clear().commit())
             val editor = withContext(Dispatchers.Main) {
                 ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
-                    it.configureStorage(context, folder, File(folder, "ui-cache")); it.start(folder)
+                    it.configureStorage(isolatedContext, folder, File(folder, "ui-cache")); it.start(folder)
                 }
             }
             model = editor
@@ -96,6 +102,18 @@ class RealNoteFrameTest {
                 val text = ParcelFileDescriptor.AutoCloseInputStream(descriptor).bufferedReader().use { it.readText() }
                 File(context.cacheDir, "frame-gfx-$name.txt").writeText(text)
                 report("GFX $name " + text.lineSequence().filter { it.contains("Janky frames") || it.contains("percentile:") || it.contains("Total frames rendered") }.joinToString(" | ") { it.trim() })
+                val layers = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("dumpsys SurfaceFlinger --list"))
+                    .bufferedReader().use { it.readLines() }.filter { it.contains("PerformanceActivity") }
+                val output = StringBuilder()
+                layers.forEach { layer ->
+                    val name = layer.removePrefix("RequestedLayerState{").substringBefore(" parentId=")
+                        .removeSuffix("}").replace(Regex("^[0-9a-f]+ "), "")
+                    val quoted = "'" + name.replace("'", "'\\''") + "'"
+                    val timing = ParcelFileDescriptor.AutoCloseInputStream(instrumentation.uiAutomation.executeShellCommand("dumpsys SurfaceFlinger --latency $quoted"))
+                        .bufferedReader().use { it.readText() }
+                    output.append("LAYER $name\n$timing\n")
+                }
+                File(context.cacheDir, "frame-surface-$name.txt").writeText(output.toString())
             }
             ActivityScenario.launch(PerformanceActivity::class.java).use { scenario ->
                 lateinit var canvas: InkCanvasView
@@ -125,15 +143,20 @@ class RealNoteFrameTest {
                 }
                 ready(); delay(600)
                 if (args.getString("preview") == "true") {
-                    fun find(node: AccessibilityNodeInfo?): AccessibilityNodeInfo? {
-                        if (node == null) return null
-                        if (node.contentDescription?.toString() == AppMessages.text(R.string.note_preview)) return node
-                        for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
-                        return null
+                    val oldWidth = canvas.width
+                    val location = IntArray(2)
+                    withContext(Dispatchers.Main) { canvas.getLocationOnScreen(location) }
+                    val inset = 24f * context.resources.displayMetrics.density
+                    val x = location[0] + if (editor.library.value.value.previewOnRight) canvas.width - inset else inset
+                    val y = location[1] + canvas.height * .5f
+                    val down = SystemClock.uptimeMillis()
+                    for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                        val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0)
+                        event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                        try { instrumentation.sendPointerSync(event) } finally { event.recycle() }
                     }
-                    val handle = checkNotNull(find(instrumentation.uiAutomation.rootInActiveWindow)) { "Preview handle missing" }
-                    check(handle.performAction(AccessibilityNodeInfo.ACTION_CLICK))
                     delay(1000); ready()
+                    assertTrue("Preview must be visibly open", canvas.width < oldWidth)
                 }
                 val height = withContext(Dispatchers.Main) { editor.viewport.height / editor.viewport.scale }
                 // Read the complete travel area before timing drawing; no blank unread regions.
@@ -143,7 +166,28 @@ class RealNoteFrameTest {
                 }
                 withContext(Dispatchers.Main) { editor.moveViewportFromPreview(0f, 0f) }
                 ready(); delay(600)
+                val expected = store.current(note!!)!!.pages.flatMap(store::rows)
+                    .filter { it.placement.bottom >= 0f && it.placement.top <= height * 5f }.map { it.ref.id }.toSet()
+                assertTrue("Every stroke across the travel area must be loaded", editor.edits.snapshot().map { it.id }.toSet().containsAll(expected))
                 report("FRAME_FIXTURE strokes=${store.current(note!!)!!.count} loaded=${editor.edits.snapshot().size} view=${canvas.width}x${canvas.height} worldHeight=$height refresh=${canvas.display.refreshRate} thermal=${context.getSystemService(PowerManager::class.java).currentThermalStatus}")
+                if (args.getString("perfetto") == "true") {
+                    val descriptors = instrumentation.uiAutomation.executeShellCommandRw("perfetto --background-wait --txt -c - -o /data/misc/perfetto-traces/misq-frames.pftrace")
+                    val config = """
+                        buffers { size_kb: 8192 fill_policy: RING_BUFFER }
+                        buffers { size_kb: 131072 fill_policy: RING_BUFFER }
+                        data_sources { config { name: "android.surfaceflinger.frametimeline" target_buffer: 0 } }
+                        data_sources { config { name: "linux.ftrace" target_buffer: 1 ftrace_config {
+                          atrace_categories: "gfx"
+                          atrace_categories: "view"
+                          atrace_apps: "net.neomenia.misqnotes.probe"
+                        } } }
+                        duration_ms: 60000
+                    """.trimIndent()
+                    ParcelFileDescriptor.AutoCloseOutputStream(descriptors[1]).use { it.write(config.toByteArray()) }
+                    val pid = ParcelFileDescriptor.AutoCloseInputStream(descriptors[0]).bufferedReader().use { it.readText().trim() }
+                    check(pid.matches(Regex("[0-9]+"))) { "Perfetto did not start: $pid" }
+                    report("PERFETTO pid=$pid")
+                }
                 fun touch(action: Int, fraction: Float) {
                     val now = SystemClock.uptimeMillis()
                     val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER })
@@ -152,9 +196,12 @@ class RealNoteFrameTest {
                         0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_TOUCHSCREEN, 0)
                     try { assertTrue(canvas.onTouchEvent(event)) } finally { event.recycle() }
                 }
+                var inputId = 100
                 suspend fun frames(count: Int, samples: Samples, action: (Int) -> Unit) {
                     val done = CountDownLatch(1); val failure = AtomicReference<Throwable?>(null)
                     val started = System.nanoTime()
+                    val id = inputId++
+                    Trace.beginAsyncSection("misq-input-$count", id)
                     withContext(Dispatchers.Main) {
                         var frame = 0; var previous = 0L
                         val callback = object : Choreographer.FrameCallback {
@@ -170,10 +217,12 @@ class RealNoteFrameTest {
                         Choreographer.getInstance().postFrameCallback(callback)
                     }
                     assertTrue("Frame loop stalled", withContext(Dispatchers.IO) { done.await(45, TimeUnit.SECONDS) })
+                    Trace.endAsyncSection("misq-input-$count", id)
                     failure.get()?.let { throw it }
                     report("FRAME_LOOP frames=$count elapsedMs=${(System.nanoTime() - started) / 1e6}")
                 }
                 for (pass in 0..1) {
+                    Trace.beginAsyncSection("misq-pan-$pass", pass)
                     if (pass == 0 && args.getString("profile") == "true")
                         Debug.startMethodTracingSampling(File(context.cacheDir, "frame-scroll").path, 32 * 1024 * 1024, 1000)
                     val samples = Samples(); active.set(samples)
@@ -191,11 +240,13 @@ class RealNoteFrameTest {
                         else assertEquals(0f, top, height * .03f)
                     }
                     delay(100); active.set(null)
+                    Trace.endAsyncSection("misq-pan-$pass", pass)
                     report("pan-pass-$pass", samples)
                     gfx("pan-$pass")
                     if (pass == 0 && args.getString("profile") == "true") Debug.stopMethodTracing()
                 }
                 val samples = Samples(); active.set(samples)
+                Trace.beginAsyncSection("misq-pinch", 10)
                 withContext(Dispatchers.Main) { editor.viewportGestureActive = true }
                 frames(180, samples) { step ->
                     val zoom = 1f + (1f - kotlin.math.cos(step * Math.PI * 2 / 180).toFloat()) * .5f
@@ -205,7 +256,62 @@ class RealNoteFrameTest {
                 }
                 withContext(Dispatchers.Main) { editor.viewportGestureActive = false; editor.viewportChanged() }
                 delay(100); active.set(null); report("pinch", samples)
+                Trace.endAsyncSection("misq-pinch", 10)
                 gfx("pinch")
+                if (args.getString("write") == "true") {
+                    ready()
+                    fun previewMagentaPixels(): Int {
+                        val location = IntArray(2)
+                        instrumentation.runOnMainSync { canvas.getLocationInWindow(location) }
+                        val rect = if (editor.library.value.value.previewOnRight)
+                            Rect(location[0] + canvas.width, location[1], canvas.rootView.width, location[1] + canvas.height)
+                        else Rect(0, location[1], location[0], location[1] + canvas.height)
+                        check(rect.width() > 0)
+                        val bitmap = Bitmap.createBitmap(rect.width(), rect.height(), Bitmap.Config.ARGB_8888)
+                        try {
+                            val done = CountDownLatch(1); var result = -1
+                            scenario.onActivity { activity -> PixelCopy.request(activity.window, rect, bitmap,
+                                { result = it; done.countDown() }, Handler(Looper.getMainLooper())) }
+                            check(done.await(5, TimeUnit.SECONDS) && result == PixelCopy.SUCCESS)
+                            val pixels = IntArray(bitmap.width * bitmap.height)
+                            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                            return pixels.count { Color.red(it) > 180 && Color.blue(it) > 180 && Color.green(it) < 100 }
+                        } finally { bitmap.recycle() }
+                    }
+                    val beforePreview = if (args.getString("preview") == "true") previewMagentaPixels() else 0
+                    val next = editor.edits.nextEntryId
+                    withContext(Dispatchers.Main) { editor.chooseTool(EditorTool.PEN); editor.style(color = Color.MAGENTA) }
+                    val writing = Samples(); active.set(writing)
+                    Trace.beginAsyncSection("misq-writing", 20)
+                    repeat(12) { contact ->
+                        ready()
+                        val down = SystemClock.uptimeMillis()
+                        frames(24, writing) { step ->
+                            val action = when (step) { 0 -> MotionEvent.ACTION_DOWN; 23 -> MotionEvent.ACTION_UP; else -> MotionEvent.ACTION_MOVE }
+                            val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_STYLUS })
+                            val coordinates = arrayOf(MotionEvent.PointerCoords().apply {
+                                x = canvas.width * (.2f + step * .02f)
+                                y = canvas.height * (.25f + contact * .035f) + kotlin.math.sin(step * .3f) * 10f
+                                pressure = .6f
+                            })
+                            val event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1, properties, coordinates,
+                                0, 0, 1f, 1f, 1, 0, android.view.InputDevice.SOURCE_STYLUS, 0)
+                            try { assertTrue(canvas.onTouchEvent(event)) } finally { event.recycle() }
+                        }
+                        ready(); delay(50)
+                    }
+                    delay(200); active.set(null); report("writing", writing)
+                    Trace.endAsyncSection("misq-writing", 20)
+                    ready()
+                    assertEquals("Every pen contact must finish as one stroke", 12, editor.edits.snapshot().count { it.id >= next })
+                    if (args.getString("preview") == "true") {
+                        delay(1000)
+                        val afterPreview = previewMagentaPixels()
+                        assertTrue("New strokes must appear in the preview", afterPreview > beforePreview + 100)
+                        report("PREVIEW_UPDATED magentaBefore=$beforePreview magentaAfter=$afterPreview")
+                    }
+                    gfx("writing")
+                }
             }
             assertEquals(sourceHash, NotebookArchive.digest(source))
             report("FRAME_SOURCE_COPY unchanged=true")
@@ -213,13 +319,8 @@ class RealNoteFrameTest {
             val job = model?.viewModelScope?.coroutineContext?.get(Job)
             withContext(Dispatchers.Main) { models.clear() }; job?.join()
             thread.quitSafely()
-            val edit = preferences.edit().clear()
-            saved.forEach { (key, value) -> when (value) {
-                is String -> edit.putString(key, value); is Boolean -> edit.putBoolean(key, value)
-                is Int -> edit.putInt(key, value); is Long -> edit.putLong(key, value); is Float -> edit.putFloat(key, value)
-                is Set<*> -> { @Suppress("UNCHECKED_CAST") edit.putStringSet(key, value as Set<String>) }
-            } }
-            check(edit.commit()); folder.deleteRecursively()
+            context.deleteSharedPreferences(preferenceName)
+            folder.deleteRecursively()
         }
     }
 }
