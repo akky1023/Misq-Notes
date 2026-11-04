@@ -50,6 +50,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var retainedStrokes = emptySet<EditorStroke>()
     private var prefetchScope: CoroutineScope? = null
     private var prefetchJob: Job? = null
+    private var prefetchPending = emptyList<Stroke>()
+    private var prefetchVersion = 0L
     private val starClassifications = java.util.WeakHashMap<EditorStroke, Boolean>()
     private val pendingStarClassifications = mutableSetOf<EditorStroke>()
     private val detectedStars = mutableMapOf<Long, EditorStroke>()
@@ -146,7 +148,6 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             width, height, mode, model.selectionOffset)
         if (key == retentionState) return
         retentionState = key
-        prefetchJob?.cancel()
         val entries = when (mode) {
             StrokeCacheMode.LIMITED -> visible.takeLast(128)
             StrokeCacheMode.VISIBLE -> visible
@@ -157,15 +158,32 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         renderer.retainVisible(retainedInk)
         if (mode == StrokeCacheMode.NEARBY || mode == StrokeCacheMode.ALL) {
             val visibleInk = visible.mapNotNull { it.second.inkOrNull }.toSet()
-            val pending = retainedInk.filter { it !in visibleInk }
-            prefetchJob = prefetchScope?.launch {
+            val center = (model.viewport.position.top + model.viewport.bottom) / 2f
+            prefetchPending = retainedStrokes.filter {
+                it.inkOrNull != null && it.ink !in visibleInk && renderer.needsPreparation(it.ink)
+            }.sortedBy {
+                val b = it.bounds
+                if (b == null) Float.POSITIVE_INFINITY else kotlin.math.abs((b.yMin + b.yMax) / 2f - center)
+            }.map { it.ink }
+            prefetchVersion++
+            if (prefetchPending.isNotEmpty() && prefetchJob?.isActive != true) prefetchJob = prefetchScope?.launch {
                 delay(300)
-                for (stroke in pending) {
-                    while (pointerId != null || fingerStart != null || model.edits.busy) delay(100)
-                    withContext(Dispatchers.Default) { renderer.prefetch(stroke) }
-                    yield()
+                while (prefetchPending.isNotEmpty()) {
+                    val version = prefetchVersion
+                    val pending = prefetchPending
+                    prefetchPending = emptyList()
+                    for (stroke in pending) {
+                        // Navigation can use geometry prepared ahead on a worker. Pen contacts
+                        // still take priority, and a new viewport replaces stale queued work.
+                        while (pointerId != null || model.edits.busy) delay(50)
+                        if (version != prefetchVersion) break
+                        withContext(Dispatchers.Default) { renderer.prefetch(stroke) }
+                        yield()
+                    }
                 }
             }
+        } else {
+            prefetchPending = emptyList(); prefetchVersion++
         }
     }
 
@@ -465,6 +483,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         settleForPause()
         completed.removeCallbacks(compactStrokes)
         prefetchScope?.cancel(); prefetchScope = null; prefetchJob = null
+        prefetchPending = emptyList(); prefetchVersion++
         pendingStarClassifications.clear(); detectedStars.clear(); starClassifications.clear(); starNoteId = null
         starFlashes.clear()
         retentionState = null; retainedStrokes = emptySet()

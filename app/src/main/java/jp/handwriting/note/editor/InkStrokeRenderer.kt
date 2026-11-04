@@ -42,9 +42,11 @@ internal object InkStrokeRenderer {
 
         @Synchronized fun clear() { retained = emptySet(); cache.clear() }
 
+        @Synchronized fun needsPreparation(stroke: Stroke) = retained?.contains(stroke) == true && stroke !in cache
+
         /** Outline generation may run on a worker; Canvas and the delegate remain UI-only. */
         fun prefetch(stroke: Stroke) {
-            if (synchronized(this) { retained?.contains(stroke) == true }) geometry(stroke)
+            if (needsPreparation(stroke)) geometry(stroke)
         }
 
         internal fun geometry(stroke: Stroke): LocalStrokeGeometry {
