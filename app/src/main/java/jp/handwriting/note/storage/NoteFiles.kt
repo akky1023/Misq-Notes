@@ -32,12 +32,13 @@ internal interface NoteBacking {
 
 /** IO-thread confined. Each manifest is committed only after all referenced stroke blobs exist. */
 class NoteFiles(directory: File, private val singleFile: Boolean = true) {
+    internal var format3: Format3Library? = null
     internal fun spatial(id: String): SpatialNoteCache.Source? =
-        if (File(root, "${uuid(id)}.misq").exists()) null else backing?.spatial(id)
+        format3?.source(id) ?: if (File(root, "${uuid(id)}.misq").exists()) null else backing?.spatial(id)
     internal fun needsPlacements(id: String, values: Map<String, StrokePlacement>): Boolean = values.isNotEmpty() &&
-        (!packed(id) || values.any { document(id).index().placements[it.key] != it.value })
-    internal fun hasLocalBody(id: String) = File(root, "${uuid(id)}.misq").exists() || manifestFile(id).exists()
-    internal fun hasExternal(id: String) = backing?.contains(id) == true
+        format3 == null && (!packed(id) || values.any { document(id).index().placements[it.key] != it.value })
+    internal fun hasLocalBody(id: String) = format3?.contains(id) == true || File(root, "${uuid(id)}.misq").exists() || manifestFile(id).exists()
+    internal fun hasExternal(id: String) = format3?.contains(id) == true || backing?.contains(id) == true
     internal var backing: NoteBacking? = null
     private val root = directory.absoluteFile.normalize().also { check(it.isDirectory || it.mkdirs()) }
     internal val directory get() = root
@@ -56,6 +57,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     private fun strokeFile(note: String, stroke: String) = File(folder(note), "${uuid(stroke)}.ink")
     internal fun document(id: String): MisqFile {
         uuid(id)
+        format3?.takeIf { it.contains(id) }?.let { it.export(id, File(root, "$id.misq")); return MisqFile(File(root, "$id.misq")) }
         if (!File(root, "$id.misq").exists()) {
             documents.remove(id)
             backing?.ensure(id)
@@ -65,6 +67,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     private fun packed(id: String) = singleFile && document(id).file.exists()
     fun thumbnail(id: String) = File(folder(id), "thumbnail-v2.png")
     fun thumbnailIsCurrent(id: String): Boolean {
+        format3?.let { return it.thumbnailCurrent(id) && thumbnail(id).exists() }
         if (packed(id)) {
             val note = document(id)
             if (!note.thumbnailCurrent()) return false
@@ -78,13 +81,20 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         }
         return thumbnail(id).let { it.exists() && it.lastModified() >= manifestFile(id).lastModified() }
     }
-    fun markThumbnailCurrent(id: String) {
+    fun markThumbnailCurrent(id: String, expectedRevision: String? = null) {
+        format3?.let { it.saveThumbnail(id, thumbnail(id).readBytes(), expectedRevision); return }
         if (packed(id) && !document(id).thumbnailCurrent()) document(id).saveThumbnail(thumbnail(id).readBytes())
         thumbnail(id).setLastModified(if (packed(id)) document(id).file.lastModified() else manifestFile(id).lastModified())
         if (packed(id)) runCatching { BlockChanges.update(document(id).file, document(id).index()) }
     }
     fun invalidateThumbnail(id: String) { thumbnail(id).takeIf { it.exists() }?.setLastModified(0) }
     internal fun storedThumbnail(id: String): File? {
+        format3?.let { library ->
+            val bytes = library.thumbnail(id) ?: return null
+            val target = thumbnail(id); target.parentFile!!.mkdirs()
+            if (!target.exists() || !target.readBytes().contentEquals(bytes)) target.writeBytes(bytes)
+            return target
+        }
         if (backing?.contains(id) == true && !File(root, "$id.misq").exists()) return backing!!.preview(id)
         if (!packed(id)) return thumbnail(id).takeIf { it.exists() }
         val bytes = document(id).thumbnail() ?: return null
@@ -97,12 +107,13 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
 
     fun create(title: String, now: Long = System.currentTimeMillis(), paper: NotePaper = NotePaper()): NoteManifest {
+        format3?.let { return it.create(title, paper, now) }
         val info = NoteInfo(UUID.randomUUID().toString(), validTitle(title), now, now, paper = paper)
         val note = NoteManifest(info, emptyList())
         save(note) { error("Empty note cannot need a stroke") }
         return note
     }
-    fun list(): List<NoteSummary> = (backing?.summaries().orEmpty() + root.listFiles().orEmpty().mapNotNull { file ->
+    fun list(): List<NoteSummary> = format3?.summaries() ?: (backing?.summaries().orEmpty() + root.listFiles().orEmpty().mapNotNull { file ->
         val id = if (file.isFile && file.extension == "misq") file.nameWithoutExtension else if (file.isDirectory && File(file, "manifest.hwn").exists()) file.name else return@mapNotNull null
         id.takeIf { runCatching { uuid(it) }.isSuccess }
     }.distinct().mapNotNull { id ->
@@ -123,7 +134,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }).associateBy { it.id }.values.sortedByDescending { it.updatedAt }
 
     /** Missing working files are represented by the newest remaining version, without publishing it. */
-    internal fun hasWorkingCopy(id: String) = backing?.contains(id) == true || document(id).file.exists() || manifestFile(id).exists()
+    internal fun hasWorkingCopy(id: String) = format3?.contains(id) == true || backing?.contains(id) == true || document(id).file.exists() || manifestFile(id).exists()
     internal fun provisionalVersions(): Map<String, Pair<File, NoteSummary>> {
         val candidates = root.listFiles().orEmpty().filter { it.isFile && it.extension.equals("misq", true) }
         contentKeys.keys.retainAll(candidates.toSet())
@@ -139,6 +150,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
 
     fun read(id: String): ReadManifest {
+        format3?.let { return ReadManifest(it.manifest(id), it.store.recovered(id)) }
         PartialNoteJournal.read(root, id)?.let { return ReadManifest(it.manifest, false) }
         if (packed(id)) return document(id).readManifest()
         val file = manifestFile(id)
@@ -148,6 +160,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         } catch (e: Exception) { throw IOException(AppMessages.text(R.string.note_format_invalid), e) }
     }
     fun previous(id: String): NoteManifest? = runCatching {
+        format3?.let { library -> return library.store.current(id)?.parents?.firstOrNull()?.let { library.store.manifest(library.store.root(it)) } }
         if (packed(id)) return document(id).previous()
         val file = manifestFile(id)
         val backup = File(file.path + ".bak")
@@ -158,6 +171,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
 
     internal fun decodeManifest(id: String, bytes: ByteArray): NoteManifest = NoteManifestCodec.decodeManifest(id, bytes)
     fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
+        format3?.let { it.save(note, placements, encode = encode); return }
         if (singleFile) {
             val target = document(note.info.id)
             if (!target.file.exists() && manifestFile(note.info.id).exists()) {
@@ -184,6 +198,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
     internal fun encodeManifest(note: NoteManifest): ByteArray = NoteManifestCodec.encodeManifest(note)
     fun stroke(note: String, storageId: String): ByteArray {
+        format3?.let { return it.stroke(note, storageId) }
         PartialNoteJournal.read(root, note)?.takeIf { it.contains(storageId) }?.let { return it.stroke(storageId) }
         if (packed(note)) return document(note).stroke(uuid(storageId))
         val bytes = readWithBackup(strokeFile(note, storageId)).first
@@ -191,6 +206,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         return bytes
     }
     internal fun <T> readStrokes(id: String, refs: List<StrokeRef>, decode: (StrokeRef, ByteArray) -> T): List<T> {
+        format3?.let { return it.read(id, refs, decode) }
         val journal = PartialNoteJournal.read(root, id)
         if (journal != null) {
             val original = refs.filter { !journal.contains(it.storageId) }
@@ -203,6 +219,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         else refs.map { decode(it, stroke(id, it.storageId)) }
     }
     fun rename(id: String, title: String) {
+        format3?.let { it.rename(id, title); return }
         val note = read(id).manifest
         val renamed = note.copy(info = note.info.copy(title = validTitle(title), updatedAt = System.currentTimeMillis()))
         val journal = PartialNoteJournal.read(root, id)
@@ -211,6 +228,14 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
     }
     /** User deletion removes aliases too, otherwise a missing original reappears provisionally. */
     internal fun deleteNotebook(id: String) {
+        if (format3 != null) {
+            delete(id)
+            // These are local review/export files, never shared format 3 objects or rollback originals.
+            root.listFiles().orEmpty().filter { it.isFile && it.extension == "misq" }.forEach { file ->
+                if (runCatching { MisqFile(file, readOnlyAlias = true).summary().id == id }.getOrDefault(false)) check(file.delete())
+            }
+            return
+        }
         uuid(id)
         val versions = root.listFiles().orEmpty().filter { file ->
             file.isFile && file.extension.equals("misq", true) &&
@@ -226,6 +251,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         }
     }
     fun delete(id: String) {
+        format3?.let { it.delete(id); return }
         backing?.deleted(uuid(id))
         BlockChanges.forget(File(root, "$id.misq"))
         if (PartialNoteJournal.exists(root, id)) PartialNoteJournal.clear(root, id)
@@ -247,6 +273,7 @@ class NoteFiles(directory: File, private val singleFile: Boolean = true) {
         known.remove(id)
     }
     fun collectOrphans(id: String) {
+        if (format3 != null) return
         if (packed(id)) { document(id).compactIfNeeded(); return }
         val current = read(id).manifest
         val previous = previous(id)

@@ -168,6 +168,16 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         file.parentFile!!.mkdirs()
         return RandomAccessFile(file, "rw").also { if (it.length() == 0L) { it.setLength(HEADER.toLong()); it.writeLong(MAGIC); it.fd.sync() } }
     }
+    internal fun importSnapshot(manifest: NoteManifest, events: List<Event>, entities: Map<Long, String>,
+        placements: Map<String, StrokePlacement>, storageIds: Set<String>, thumbnail: ByteArray?, checkpoint: () -> Unit = {}, read: (String) -> ByteArray) {
+        check(!readOnlyAlias && !file.exists()) { "Export must not replace an existing notebook" }
+        open().use { output ->
+            val records = storageIds.associateWith { checkpoint(); append(output, read(it)) }
+            val preview = thumbnail?.let { append(output, it) }
+            commit(output, Index(1, manifest, records, events, entities, preview, if (preview != null) key(manifest) else null, placements = placements))
+        }
+        validate(checkpoint)
+    }
     fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
         upgradeLegacy()
@@ -271,10 +281,10 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
     private fun upgradeLegacy() {
         if (file.exists() && file.length() >= 8 && RandomAccessFile(file, "r").use { it.readLong() == LEGACY_MAGIC }) rewrite(index())
     }
-    fun validate() {
+    fun validate(checkpoint: () -> Unit = {}) {
         val index = index()
         RandomAccessFile(file, "r").use { input ->
-            index.manifest.strokes.forEach { record(input, index.records.getValue(it.storageId)) }
+            index.records.values.forEach { checkpoint(); record(input, it) }
             index.thumbnail?.let { record(input, it) }
         }
     }

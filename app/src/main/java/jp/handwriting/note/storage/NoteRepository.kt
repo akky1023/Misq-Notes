@@ -25,12 +25,27 @@ import jp.handwriting.note.R
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption.*
 
-data class NoteSnapshot(val manifest: NoteManifest, val entries: List<OrderedEdits.Entry<EditorStroke>>)
+data class NoteSnapshot(val manifest: NoteManifest, val entries: List<OrderedEdits.Entry<EditorStroke>>,
+    val loadedIds: Set<Long>? = null, val addedSince: Long = Long.MAX_VALUE)
 data class LoadedNote(val manifest: NoteManifest, val entries: List<OrderedEdits.Entry<EditorStroke>>, val recovered: Boolean,
     val partial: Boolean = false, val contentBottom: Float = 0f)
 
 class NoteRepository internal constructor(private val files: NoteFiles, private val listCache: NoteListCache? = null,
     private val persist: (() -> Unit) -> Unit = { it() }) {
+    internal val usesImmutable get() = files.format3 != null
+    @Synchronized internal fun prepareMergePrimary(id: String) {
+        files.format3?.takeIf { it.store.current(id) != null }?.export(id, File(files.directory, "$id.misq"))
+    }
+    @Synchronized internal fun exportNotebook(id: String, target: File, checkpoint: () -> Unit) {
+        check(!target.exists())
+        files.format3?.let { library -> library.store.export(checkNotNull(library.store.current(id)), target, checkpoint); return }
+        val source = files.document(id).file
+        FileOutputStream(target).use { output -> source.inputStream().use { input ->
+            val buffer = ByteArray(65536)
+            while (true) { checkpoint(); val count = input.read(buffer); if (count < 0) break; output.write(buffer, 0, count) }
+        }; output.fd.sync() }
+        MisqFile(target).validate(checkpoint)
+    }
     private val thumbnailKeys = mutableMapOf<String, Pair<NotePaper, List<String>>>()
     // Retain Ink's outline cache between saves instead of rebuilding the entire preview per pen lift.
     private val thumbnailRenderer by lazy { InkStrokeRenderer.create() }
@@ -45,7 +60,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     @Synchronized internal fun releaseWorkingCopies(release: () -> Unit) { release() }
     @Synchronized fun list(): List<NoteSummary> {
         val provisional = files.provisionalVersions().mapValues { it.value.second }
-        return ((listCache?.list(files::list) ?: files.list()).filter { it.id !in provisional } + provisional.values)
+        return ((if (usesImmutable) files.list() else listCache?.list(files::list) ?: files.list()).filter { it.id !in provisional } + provisional.values)
             .sortedByDescending { it.updatedAt }.map { note ->
         // Error labels follow the current app language even when the index predates a switch.
         if (note.problem == null) note else note.copy(title = AppMessages.text(R.string.unreadable_note),
@@ -70,15 +85,21 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         persist {
             val clean = listCache?.changing()
             manifest = store.copy(conflict, title)
+            files.format3?.let { manifest = it.imported(File(files.directory, "${manifest.info.id}.misq")) }
             listCache?.saved(summary(manifest), clean == true)
         }
         return manifest
     }
-    @Synchronized internal fun saveMerge(write: (File) -> NoteManifest): NoteManifest {
+    @Synchronized internal fun saveMerge(resolvedBranches: List<File> = emptyList(), write: (File) -> NoteManifest): NoteManifest {
         lateinit var manifest: NoteManifest
         persist {
             val clean = listCache?.changing()
+            if (resolvedBranches.isNotEmpty()) files.format3?.requireCurrentExport(MisqFile(resolvedBranches.first(), readOnlyAlias = true).summary().id)
             manifest = write(files.directory)
+            files.format3?.let { library ->
+                val branches = resolvedBranches.mapNotNull(library::branchParent)
+                manifest = library.imported(File(files.directory, "${manifest.info.id}.misq"), branches + listOfNotNull(library.store.current(manifest.info.id)?.id))
+            }
             recent = null
             thumbnailKeys.remove(manifest.info.id)
             files.invalidateThumbnail(manifest.info.id)
@@ -87,11 +108,16 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         return manifest
     }
     @Synchronized internal fun autoMergeConflict(store: NoteConflicts, conflict: NoteConflict): NoteManifest? {
+        prepareMergePrimary(conflict.noteId)
         if (!store.canAutoMerge(conflict)) return null
         var manifest: NoteManifest? = null
         persist {
             val clean = listCache?.changing()
-            manifest = store.autoMerge(conflict)
+            files.format3?.requireCurrentExport(conflict.noteId)
+            manifest = store.autoMerge(conflict) { note -> files.format3?.let { library ->
+                val branch = library.branchParent(conflict.file)
+                library.imported(File(files.directory, "${note.info.id}.misq"), listOfNotNull(library.store.current(note.info.id)?.id, branch))
+            } }
             manifest?.let {
                 recent = null
                 files.invalidateThumbnail(it.info.id)
@@ -122,7 +148,12 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         thumbnailKeys.remove(id)
         if (recent?.manifest?.info?.id == id) recent = null
     }
-    @Synchronized fun preview(id: String): File {
+    fun preview(id: String): File {
+        if (usesImmutable) {
+            if (files.thumbnailIsCurrent(id)) return files.storedThumbnail(id) ?: files.thumbnail(id)
+            return immutablePreview(id)
+        }
+        return synchronized(this) {
         if (provisional(id) != null) {
             val loaded = load(id)
             thumbnail(NoteSnapshot(loaded.manifest, loaded.entries), provisional = true)
@@ -135,13 +166,40 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
             thumbnail(NoteSnapshot(loaded.manifest, loaded.entries))
         }
         return target
+        }
     }
-    @Synchronized fun updatePreview(snapshot: NoteSnapshot) {
+    private fun immutablePreview(id: String): File {
+        val source = synchronized(this) { files.spatial(id) } ?: return files.thumbnail(id)
+        // Provider reads and native outline generation never hold the editor's save lock.
+        val entries = source.load(0f, 1000f, emptySet()) { ref, bytes -> OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }
+        synchronized(this) {
+            if (files.format3?.store?.current(id)?.id == source.revisionId)
+                thumbnail(NoteSnapshot(source.manifest, entries), alreadyLoaded = true, expectedRevision = source.revisionId)
+        }
+        return files.thumbnail(id)
+    }
+    fun updatePreview(snapshot: NoteSnapshot) {
+        if (usesImmutable) {
+            immutablePreview(snapshot.manifest.info.id)
+            return
+        }
+        synchronized(this) {
         if (PartialNoteJournal.exists(files.directory, snapshot.manifest.info.id)) return
         // A delayed preview must not attach an older snapshot to a newer committed note.
         if (provisional(snapshot.manifest.info.id) == null && files.read(snapshot.manifest.info.id).manifest == snapshot.manifest) thumbnail(snapshot)
+        }
     }
     @Synchronized fun save(snapshot: NoteSnapshot) {
+        files.format3?.let { library ->
+            val entries = snapshot.entries.associateBy { it.value.storageId }
+            persist {
+                library.save(snapshot.manifest, snapshot.entries.associate { it.value.storageId to it.value.placement },
+                    snapshot.loadedIds, snapshot.addedSince) { encodeStroke(entries.getValue(it).value) }
+                files.invalidateThumbnail(snapshot.manifest.info.id)
+            }
+            recent = null
+            return
+        }
         val strokes = snapshot.entries.associateBy { it.value.storageId }
         val id = snapshot.manifest.info.id
         val previous = recent?.takeIf { it.manifest.info.id == id }
@@ -218,34 +276,30 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         val top = viewport.top
         val height = (1000f * aspect / viewport.zoom).coerceAtLeast(1000f)
         return try {
-            val current = manifest.strokes.associate { it.id to it.storageId }
+            val current = journal?.manifest?.strokes?.associate { it.id to it.storageId }.orEmpty()
             val changed = journal?.placements?.keys.orEmpty()
             val entries = (source.load((top - 500f).coerceAtLeast(0f), top + height + 500f, emptySet()) { ref, bytes ->
-                if (current[ref.id] == ref.storageId && ref.storageId !in changed)
+                if (journal == null || (current[ref.id] == ref.storageId && ref.storageId !in changed))
                 OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))
                 else null
-            }.filterNotNull() + manifest.strokes.filter { it.storageId in changed }.map { ref ->
+            }.filterNotNull() + (if (journal == null) emptyList() else manifest.strokes.filter { it.storageId in changed }).map { ref ->
                 OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, checkNotNull(journal).stroke(ref.storageId)))
             }).sortedBy { it.id }
             spatialSource = source
-            LoadedNote(manifest, entries, false, partial = entries.size < manifest.strokes.size, contentBottom = source.bottom)
+            LoadedNote(manifest, entries, source.recovered, partial = entries.size < manifest.strokes.size, contentBottom = source.bottom)
         } catch (_: Exception) { fallback() }
     }
     internal fun loadRegion(id: String, top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit = {}): List<OrderedEdits.Entry<EditorStroke>> {
-        val records = synchronized(this) {
-            val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
-            source.load(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
-        }
+        val source = synchronized(this) { checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id }) }
+        val records = source.load(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
         return records.map { (ref, bytes) -> checkpoint(); OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }.sortedBy { it.id }
     }
     @Synchronized internal fun regionPending(id: String, top: Float, bottom: Float, loaded: Set<Long>): Boolean =
         spatialSource?.takeIf { it.manifest.info.id == id }?.pending(top, bottom, loaded) == true
     internal fun loadNextRegion(id: String, top: Float, bottom: Float, loaded: Set<Long>,
         checkpoint: () -> Unit): List<OrderedEdits.Entry<EditorStroke>> {
-        val records = synchronized(this) {
-            val source = checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id })
-            source.next(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
-        }
+        val source = synchronized(this) { checkNotNull(spatialSource?.takeIf { it.manifest.info.id == id }) }
+        val records = source.next(top, bottom, loaded, checkpoint) { ref, bytes -> ref to bytes }
         // Native outline generation must not hold the repository lock while the user saves/navigates.
         return records.map { (ref, bytes) -> checkpoint(); OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes)) }.sortedBy { it.id }
     }
@@ -266,6 +320,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         val loaded = try {
             load(current.manifest, current.recovered)
         } catch (e: Exception) {
+            if (usesImmutable) throw e // Never turn an unread/corrupt latest revision into an editable older snapshot.
             val previous = files.previous(id) ?: throw e
             load(previous, true)
         }
@@ -284,13 +339,13 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
             OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))
         }, recovered,
     )
-    private fun thumbnail(snapshot: NoteSnapshot, provisional: Boolean = false) {
+    private fun thumbnail(snapshot: NoteSnapshot, provisional: Boolean = false, alreadyLoaded: Boolean = false, expectedRevision: String? = null) {
         val info = snapshot.manifest.info
-        val source = spatialSource?.takeIf { it.manifest.info.id == info.id && snapshot.entries.size < snapshot.manifest.strokes.size }
-        val refs = snapshot.manifest.strokes.associate { it.id to it.storageId }
+        val source = if (alreadyLoaded) null else (if (usesImmutable) files.spatial(info.id) else spatialSource)?.takeIf { it.manifest.info.id == info.id && snapshot.entries.size < snapshot.manifest.strokes.size }
+        val refs = if (usesImmutable) null else snapshot.manifest.strokes.associate { it.id to it.storageId }
         val missing = source?.load(0f, 1000f, snapshot.entries.map { it.id }.toSet()) { ref, bytes ->
             OrderedEdits.Entry(ref.id, decodeStroke(ref.storageId, bytes))
-        }.orEmpty().filter { refs[it.id] == it.value.storageId }
+        }.orEmpty().filter { refs == null || refs[it.id] == it.value.storageId }
         val entries = (snapshot.entries + missing).filter { entry -> entry.value.bounds?.let { it.xMax >= 0 && it.yMax >= 0 && it.xMin <= 1000 && it.yMin <= 1000 } == true }
         val previewPaper = NotePaper(color = info.paper.color)
         val key = previewPaper to entries.map { it.value.storageId }
@@ -298,8 +353,8 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
         if (target.exists() && (thumbnailKeys[info.id] == key || (!provisional && info.id !in thumbnailKeys && files.thumbnailIsCurrent(info.id)))) {
             thumbnailKeys[info.id] = key
             if (!provisional) {
-                if (!files.thumbnailIsCurrent(info.id)) persist { files.markThumbnailCurrent(info.id) }
-                else files.markThumbnailCurrent(info.id)
+                if (!files.thumbnailIsCurrent(info.id)) persist { files.markThumbnailCurrent(info.id, expectedRevision) }
+                else if (!usesImmutable) files.markThumbnailCurrent(info.id)
             }
             return
         }
@@ -318,7 +373,7 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
                 check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs())
                 FileOutputStream(temporary).use { output -> check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)); output.fd.sync() }
                 Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE, REPLACE_EXISTING)
-                if (!provisional) persist { files.markThumbnailCurrent(info.id) }
+                if (!provisional) persist { files.markThumbnailCurrent(info.id, expectedRevision) }
                 listCache?.thumbnail(info.id, target.path)
                 thumbnailKeys[info.id] = key
             } finally { bitmap.recycle() }

@@ -10,7 +10,7 @@ import java.io.InputStream
 internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String = "packed-v1") : PackedFiles {
     private val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
     private var folder: Uri? = null
-    private var known = mutableMapOf<String, Uri>()
+    @Volatile private var known = java.util.concurrent.ConcurrentHashMap<String, Uri>()
     private fun children(parent: Uri): MutableMap<String, Uri> {
         val uri = DocumentsContract.buildChildDocumentsUriUsingTree(parent, DocumentsContract.getDocumentId(parent))
         return checkNotNull(resolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)).use { cursor ->
@@ -19,7 +19,7 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
     }
     override fun names(): Set<String> {
         if (folder == null) folder = locate(false)
-        known = folder?.let(::children) ?: mutableMapOf()
+        known = java.util.concurrent.ConcurrentHashMap(folder?.let(::children).orEmpty())
         return known.keys.toSet()
     }
     private fun locate(create: Boolean): Uri? {
@@ -42,11 +42,11 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         output.toByteArray()
     }
     override fun write(name: String, bytes: ByteArray) {
-        if (name in known) { check(digest(name) == NotebookArchive.digest(bytes)); return }
+        if (known.containsKey(name)) { check(digest(name) == NotebookArchive.digest(bytes)); return }
         bytes.inputStream().use { writeStream(name, it) }
     }
     override fun writeStream(name: String, input: InputStream) {
-        check(name !in known)
+        check(!known.containsKey(name))
         if (folder == null) folder = checkNotNull(locate(true))
         val uri = checkNotNull(DocumentsContract.createDocument(resolver, checkNotNull(folder), "application/octet-stream", name))
         checkNotNull(resolver.openOutputStream(uri, "w")).use { output -> input.copyTo(output, 8192); output.flush() }

@@ -142,6 +142,10 @@ class NotePreviewTest {
             withTimeout(15000) { model.workspace.first { it.current != null && !it.working } }
             withContext(Dispatchers.Main) {
                 model.edits.addAll(listOf(line(500f, 0xFFFF0000.toInt()), line(4500f, 0xFF0000FF.toInt())))
+                // Make scrolling necessary in either orientation. The default narrow preview
+                // can fit this entire note on a tall portrait tablet.
+                val display = instrumentation.targetContext.resources.displayMetrics
+                model.previewLayout(display.heightPixels / (3f * display.density), .5f)
             }
             ActivityScenario.launch(MainActivity::class.java).use { scenario ->
                 val canvas = java.util.concurrent.atomic.AtomicReference<InkCanvasView>()

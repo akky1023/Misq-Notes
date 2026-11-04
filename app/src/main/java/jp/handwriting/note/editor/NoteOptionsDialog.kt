@@ -48,6 +48,18 @@ internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String
     }
     val pdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf"), complete)
     val png = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png"), complete)
+    val notebook = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream"), complete)
+    fun exportNotebook() {
+        scope.launch {
+            busy = true; error = null; success = false
+            val file = File(context.cacheDir, "export-${UUID.randomUUID()}.tmp")
+            try {
+                model.exportNotebookFile(id, file)
+                pending = file.path
+                notebook.launch(title.replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), "_").take(100) + ".misq")
+            } catch (e: Exception) { file.delete(); busy = false; error = AppMessages.text(R.string.export_failed, e.localizedMessage) }
+        }
+    }
     fun export(format: NoteExportFormat) {
         scope.launch {
             busy = true; error = null; success = false
@@ -85,6 +97,7 @@ internal fun NoteOptionsDialog(model: EditorViewModel, id: String, title: String
                 }
             }
             if (busy) CircularProgressIndicator(Modifier.size(24.dp))
+            TextButton(enabled = !busy, onClick = ::exportNotebook) { Text(AppMessages.text(R.string.export_notebook_file)) }
             if (success) Text(AppMessages.text(R.string.export_complete))
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         }

@@ -16,15 +16,22 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
         if (packs.sumOf { it.members.size } <= 20_000) knownIndexes[hash] = packs
     }
 
-    internal class Source(val manifest: NoteManifest, val packs: List<Pack>, private val files: PackedFiles) {
-        private val current = manifest.strokes.associate { it.id to it.storageId }
+    internal class Source(val manifest: NoteManifest, val packs: List<Pack>, private val files: PackedFiles?,
+        private val immutable: Pair<ImmutableNoteStore, ImmutableNoteStore.Root>? = null, val recovered: Boolean = false) {
+        constructor(store: ImmutableNoteStore, root: ImmutableNoteStore.Root, recovered: Boolean = false) : this(store.manifest(root), emptyList(), null, store to root, recovered)
+        private val current by lazy { manifest.strokes.associate { it.id to it.storageId } }
+        val revisionId get() = immutable?.second?.id
         private fun Member.available(loaded: Set<Long>) = ref.id !in loaded && current[ref.id] == ref.storageId
         fun withManifest(manifest: NoteManifest) = Source(manifest, packs, files)
-        val bottom get() = packs.maxOfOrNull { pack -> pack.members.maxOf { it.placement.bottom } } ?: 0f
-        fun pending(top: Float, bottom: Float, loaded: Set<Long>) = packs.any { pack ->
+        val bottom get() = immutable?.second?.bottom ?: packs.maxOfOrNull { pack -> pack.members.maxOf { it.placement.bottom } } ?: 0f
+        fun pending(top: Float, bottom: Float, loaded: Set<Long>): Boolean {
+            immutable?.let { (store, root) -> return store.pending(root, top, bottom, loaded) }
+            return packs.any { pack ->
             pack.members.any { it.available(loaded) && it.placement.bottom >= top && it.placement.top <= bottom }
+            }
         }
         fun <T> load(top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit = {}, decode: (StrokeRef, ByteArray) -> T): List<T> {
+            immutable?.let { (store, root) -> return store.visible(root, top, bottom, loaded, checkpoint).map { decode(it.first, it.second) } }
             val result = mutableListOf<T>()
             for (pack in packs) {
                 if (pack.members.none { it.available(loaded) && it.placement.bottom >= top && it.placement.top <= bottom }) continue
@@ -36,6 +43,7 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
         /** One pack at a time lets navigation and editing take priority over prefetch. */
         fun <T> next(top: Float, bottom: Float, loaded: Set<Long>, checkpoint: () -> Unit,
             decode: (StrokeRef, ByteArray) -> T): List<T> {
+            immutable?.let { (store, root) -> return store.visible(root, top, bottom, loaded, checkpoint, onePage = true).map { decode(it.first, it.second) } }
             val center = (top.toDouble() + bottom.toDouble()) / 2
             val pack = packs.filter { it.members.any { member -> member.available(loaded) &&
                 member.placement.bottom >= top && member.placement.top <= bottom } }.minByOrNull { candidate ->
@@ -53,7 +61,7 @@ internal class SpatialNoteCache(private val files: PackedFiles) {
             decode: (StrokeRef, ByteArray) -> T): List<T> {
                 val result = mutableListOf<T>()
                 val digest = MessageDigest.getInstance("SHA-256")
-                files.openRead(pack.name).use { raw -> DataInputStream(java.security.DigestInputStream(raw, digest)).use { input ->
+                checkNotNull(files).openRead(pack.name).use { raw -> DataInputStream(java.security.DigestInputStream(raw, digest)).use { input ->
                     require(input.readInt() == PACK_MAGIC && input.readInt() == pack.members.size)
                     pack.members.forEach { member ->
                         checkpoint()
