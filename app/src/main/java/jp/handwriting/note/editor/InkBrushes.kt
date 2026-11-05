@@ -17,18 +17,7 @@ internal object InkBrushes {
     @Synchronized fun pressurePen(curve: PressureCurve): BrushFamily = curves.getOrPut(curve) {
         // Ink requires distinct modifier endpoints. At 100%, the tip is already full size
         // for every pressure, so no size behavior is needed.
-        val behaviors = if (curve.minimumPercent == 100) emptyList() else listOf(BrushBehavior(
-            BrushBehavior.Source.NORMALIZED_PRESSURE, BrushBehavior.Target.SIZE_MULTIPLIER,
-            0f, 1f, curve.minimumPercent / 100f, 1f,
-            responseCurve = curve.spline?.let { spline -> EasingFunction.Linear(spline.samples.map { p ->
-                ImmutableVec(p.x, (p.y - curve.minimumPercent / 100f) / (1f - curve.minimumPercent / 100f))
-            }) } ?: curve.bezier?.let { c -> EasingFunction.CubicBezier(c.x1 / 100f, c.y1 / 100f, c.x2 / 100f, c.y2 / 100f) }
-                ?: EasingFunction.Linear((0..32).map { i ->
-                    val p = i / 32f
-                    ImmutableVec(p, p.toDouble().pow(curve.exponentPercent / 100.0).toFloat())
-                }),
-            enabledToolTypes = setOf(InputToolType.STYLUS),
-        ))
+        val behaviors = if (curve.minimumPercent == 100) emptyList() else listOf(pressureBehavior(curve))
         BrushFamily(
             tip = BrushTip(behaviors = behaviors),
             clientBrushFamilyId = curve.spline?.let { spline ->
@@ -41,6 +30,36 @@ internal object InkBrushes {
                 "net.neomenia.handwriting.pressure-v2:${curve.minimumPercent}:${c.x1}:${c.y1}:${c.x2}:${c.y2}"
             } ?: "net.neomenia.handwriting.pressure-v1:${curve.minimumPercent}:${curve.exponentPercent}",
         )
+    }
+
+    private fun pressureBehavior(curve: PressureCurve): BrushBehavior {
+        val response = curve.spline?.let { spline -> EasingFunction.Linear(spline.samples.map { p ->
+            ImmutableVec(p.x, (p.y - curve.minimumPercent / 100f) / (1f - curve.minimumPercent / 100f))
+        }) } ?: curve.bezier?.let { c -> EasingFunction.CubicBezier(c.x1 / 100f, c.y1 / 100f, c.x2 / 100f, c.y2 / 100f) }
+            ?: EasingFunction.Linear((0..32).map { i ->
+                val p = i / 32f
+                ImmutableVec(p, p.toDouble().pow(curve.exponentPercent / 100.0).toFloat())
+            })
+        val pressure = BrushBehavior.ResponseNode(response, BrushBehavior.ToolTypeFilterNode(
+            setOf(InputToolType.STYLUS),
+            BrushBehavior.SourceNode(BrushBehavior.Source.NORMALIZED_PRESSURE, 0f, 1f),
+        ))
+        // Distance damping runs inside Ink's incremental live geometry, including prediction.
+        // Keep max(current, damped): rising pressure is immediate and thick parts never shrink.
+        val damped = BrushBehavior.DampingNode(
+            BrushBehavior.DampingSource.DISTANCE_IN_MULTIPLES_OF_BRUSH_SIZE, 1f, pressure,
+        )
+        val difference = BrushBehavior.BinaryOpNode(BrushBehavior.BinaryOp.SUM, damped,
+            BrushBehavior.BinaryOpNode(BrushBehavior.BinaryOp.PRODUCT, BrushBehavior.ConstantNode(-1f), pressure))
+        // Map [-1, 1] to [0, 1], then apply max(difference, 0) with a piecewise linear curve.
+        val positiveDifference = BrushBehavior.ResponseNode(
+            EasingFunction.Linear(listOf(ImmutableVec(0.5f, 0f))),
+            BrushBehavior.InterpolationNode(BrushBehavior.Interpolation.LERP, difference,
+                BrushBehavior.ConstantNode(0.5f), BrushBehavior.ConstantNode(1f)),
+        )
+        val filled = BrushBehavior.BinaryOpNode(BrushBehavior.BinaryOp.SUM, pressure, positiveDifference)
+        return BrushBehavior(listOf(BrushBehavior.TargetNode(BrushBehavior.Target.SIZE_MULTIPLIER,
+            curve.minimumPercent / 100f, 1f, filled)))
     }
     fun curveFor(family: BrushFamily): PressureCurve? {
         val parts = family.clientBrushFamilyId.split(':')
