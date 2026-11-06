@@ -6,6 +6,26 @@ import org.junit.Test
 import java.io.IOException
 
 class SaveQueueTest {
+    @Test fun previewDebounceWaitsForAnIdleGapButFlushStillBypassesIt() = runBlocking {
+        val scope = CoroutineScope(coroutineContext + SupervisorJob())
+        try {
+            val writes = mutableListOf<Int>()
+            val queue = SaveQueue<Int>(scope, batchMillis = 100, debounce = true) { writes += it }
+            repeat(12) { queue.request(it); delay(20) }
+            assertTrue("Continuous preview updates must not start repeated renders", writes.isEmpty())
+            assertTrue(withTimeout(5000) { queue.await(queue.state.value.latest) })
+            assertEquals(listOf(11), writes)
+            val next = queue.request(12)
+            yield()
+            assertTrue(withTimeout(5000) { queue.flush(next) })
+            assertEquals(listOf(11,12), writes)
+            queue.request(13); yield(); delay(25)
+            assertEquals("An old flush cannot bypass the next idle window", listOf(11,12), writes)
+            assertTrue(withTimeout(5000) { queue.await(queue.state.value.latest) })
+            assertEquals(listOf(11,12,13), writes)
+        } finally { scope.cancel() }
+    }
+
     @Test fun flushBypassesAnAlreadyStartedBatchAndFutureRequestsStillBatch() = runBlocking {
         val scope = CoroutineScope(coroutineContext + SupervisorJob())
         try {

@@ -35,7 +35,7 @@ import androidx.input.motionprediction.MotionEventPredictor
 import kotlin.math.hypot
 import kotlinx.coroutines.*
 
-class InkCanvasView(context: Context, private val model: EditorViewModel, renderAppendLimit: Int = StrokeRenderCache.APPEND_SIZE) : FrameLayout(context) {
+class InkCanvasView(context: Context, private val model: EditorViewModel, renderAppendLimit: Int = StrokeRenderCache.APPEND_SIZE, private val useTileCache: Boolean = true) : FrameLayout(context) {
     companion object { const val LOGICAL_WIDTH = Viewport.WIDTH; const val ERASER_RADIUS = 10f }
     private val strokeToView = Matrix()
     private val viewToStroke = Matrix()
@@ -44,6 +44,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     // Recoloring a shared mesh for the flash must not modify resources in completed display lists.
     private val flashRenderer = InkStrokeRenderer.create()
     private val strokeCache = StrokeRenderCache(renderAppendLimit)
+    private val tileCache by lazy { StrokeTileCache({ completed.postInvalidateOnAnimation() }) }
+    private val refineTiles = Runnable { if (tileCache.needsRefinement) completed.invalidate() }
     private data class RetentionState(val revision: Long, val position: ViewPosition, val width: Int,
         val height: Int, val mode: StrokeCacheMode, val selectionOffset: WorldPoint)
     private var retentionState: RetentionState? = null
@@ -209,20 +211,28 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             paperBounds.set(model.viewport.position.left, model.viewport.position.top, model.viewport.right, model.viewport.bottom)
             PaperRenderer.draw(canvas, model.workspace.value.current?.paper ?: defaultPaper, paperBounds, scale)
             canvas.restore()
-            val compact = pointerId == null && fingerStart == null && !model.ui.value.busy && SystemClock.uptimeMillis() - lastCanvasChange >= 500
+            val compact = !useTileCache && pointerId == null && fingerStart == null && !model.ui.value.busy && SystemClock.uptimeMillis() - lastCanvasChange >= 500
             val visible = model.visibleStrokeEntries()
             classifyVisibleStars(visible)
             updateRetention(visible)
-            strokeCache.draw(canvas, visible, model.viewport.position,
-                width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes, model.selectionScale,
-                starIds = detectedStars.keys) { target, entry, selected ->
-                target.save()
-                target.concat(strokeToView)
-                if (selected) target.translate(model.selectionOffset.x, model.selectionOffset.y)
-                if (entry.image != null) EmbeddedImages.draw(target, if (selected) entry.image.resized(model.selectionScale) else entry.image)
-                else renderer.draw(target, entry.ink, strokeToView)
-                target.restore()
+            fun drawVectors(targetCanvas: Canvas) {
+                strokeCache.draw(targetCanvas, visible, model.viewport.position,
+                    width, height, model.selectionOffset, model::isSelected, compact, retainedStrokes, model.selectionScale,
+                    starIds = detectedStars.keys) { target, entry, selected ->
+                    target.save()
+                    target.concat(strokeToView)
+                    if (selected) target.translate(model.selectionOffset.x, model.selectionOffset.y)
+                    if (entry.image != null) EmbeddedImages.draw(target, if (selected) entry.image.resized(model.selectionScale) else entry.image)
+                    else renderer.draw(target, entry.ink, strokeToView)
+                    target.restore()
+                }
             }
+            if (useTileCache) {
+                tileCache.draw(canvas, visible, model.viewport.position, width, height, model.selectionOffset,
+                    model::isSelected, model.selectionScale, fingerStart != null, ::drawVectors)
+                completed.removeCallbacks(refineTiles)
+                if (tileCache.needsRefinement) completed.postDelayed(refineTiles, 160)
+            } else drawVectors(canvas)
             if (compact && strokeCache.pendingCompaction) postOnAnimation(compactStrokes)
         }
     }
@@ -422,8 +432,10 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         if (state != completedState) {
             lastCanvasChange = SystemClock.uptimeMillis()
             completed.invalidate()
-            completed.removeCallbacks(compactStrokes)
-            completed.postDelayed(compactStrokes, 500)
+            if (!useTileCache) {
+                completed.removeCallbacks(compactStrokes)
+                completed.postDelayed(compactStrokes, 500)
+            }
         }
         invalidate()
     }
@@ -490,6 +502,8 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     override fun onDetachedFromWindow() {
         settleForPause()
         completed.removeCallbacks(compactStrokes)
+        completed.removeCallbacks(refineTiles)
+        tileCache.close()
         prefetchScope?.cancel(); prefetchScope = null; prefetchJob = null
         prefetchPending = emptyList(); prefetchVersion++
         pendingStarClassifications.clear(); detectedStars.clear(); starClassifications.clear(); starNoteId = null

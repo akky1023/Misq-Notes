@@ -280,7 +280,7 @@ class EditorViewModel : ViewModel() {
                     mutablePreferences.value = mutablePreferences.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.settings_save_failed, it) } ?: mutablePreferences.value.error?.takeIf { state.latest == 0L })
                 } }
-                previewSaves = SaveQueue(viewModelScope, batchMillis = 1000) { snapshot -> withContext(Dispatchers.IO) {
+                previewSaves = SaveQueue(viewModelScope, batchMillis = 1000, debounce = true) { snapshot -> withContext(Dispatchers.IO) {
                     repository!!.updatePreview(snapshot)
                 } }
                 notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
