@@ -49,6 +49,7 @@ internal fun FloatingEditorToolbar(
     onTool: (EditorTool) -> Unit, onColor: (Int) -> Unit, onFullColor: (Int) -> Unit, onSize: (Int) -> Unit, onTransparency: (Int) -> Unit,
     onSaveColor: (Int) -> Unit, onRemoveColor: (Int) -> Unit, onRetryPalette: () -> Unit,
     onSaveWidth: (Int, Int) -> Unit, onRetryPreferences: () -> Unit,
+    onDrawShapes: (Boolean) -> Unit, onSnapShapes: (Boolean) -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onToolOrder: (List<EditorTool>) -> Unit, onDockChange: (ToolbarDock) -> Unit,
     onLassoMode: (LassoMode) -> Unit, onImport: () -> Unit, onLassoIncludeMedia: (Boolean) -> Unit,
 ) {
@@ -278,7 +279,7 @@ internal fun FloatingEditorToolbar(
     when (dialog) {
         "color" -> RgbColorDialog(ui.color, palette, !ui.busy, onFullColor, onSaveColor, onRemoveColor, onRetryPalette,
             title = if (ui.tool == EditorTool.HIGHLIGHTER) AppMessages.text(R.string.highlighter_color) else AppMessages.text(R.string.pen_color), allowAlpha = true) { dialog = null }
-        "details" -> PenDetailsDialog(ui, preferences, onSize, onTransparency, onRetryPreferences, onColor = { dialog = "detailsColor" }) { dialog = null }
+        "details" -> PenDetailsDialog(ui, preferences, onSize, onTransparency, onRetryPreferences, onDrawShapes, onSnapShapes, onColor = { dialog = "detailsColor" }) { dialog = null }
         "detailsColor" -> RgbColorDialog(ui.color, palette, !ui.busy, onFullColor, onSaveColor, onRemoveColor, onRetryPalette,
             title = if (ui.tool == EditorTool.HIGHLIGHTER) AppMessages.text(R.string.highlighter_color) else AppMessages.text(R.string.pen_color), allowAlpha = true) { dialog = "details" }
     }

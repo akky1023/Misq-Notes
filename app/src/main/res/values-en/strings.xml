@@ -303,4 +303,6 @@
     <string name="operation_preparing_note">Preparing note</string>
     <string name="operation_syncing">Syncing to external storage</string>
     <string name="operation_changing_storage">Changing storage location</string>
+    <string name="draw_shapes">Draw shapes</string>
+    <string name="snap_shapes">Enable snapping</string>
 </resources>

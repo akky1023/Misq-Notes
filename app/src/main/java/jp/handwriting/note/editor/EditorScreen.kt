@@ -115,6 +115,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                             onRetryPalette = model::retryPalette,
                             onSaveWidth = model::saveWidth,
                             onRetryPreferences = model::retryPreferences,
+                            onDrawShapes = model::drawShapes, onSnapShapes = model::snapShapes,
                             onUndo = model.edits::undo,
                             onRedo = model.edits::redo,
                             onToolOrder = model::toolOrder,

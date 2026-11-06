@@ -242,6 +242,52 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private var pointerId: Int? = null
     private var activeDevice: Int? = null
     private var drawing: InProgressStrokeId? = null
+    private var holdLine: HoldLine? = null
+    private var linePreview: Stroke? = null
+    private var linePressure = StrokeInput.NO_PRESSURE
+    private val anglePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
+        color = Color.WHITE
+    }
+    private val angleBackground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xDD263238.toInt() }
+    private val holdLineTimer = Runnable {
+        val line = holdLine
+        val id = drawing
+        if (line != null && id != null && line.activate(SystemClock.uptimeMillis())) {
+            val copy = recovery[id]
+            if (copy != null) {
+                linePressure = copy.inputs[copy.inputs.size - 1].pressure
+                ink.cancelStroke(id)
+                updateLinePreview(copy)
+            }
+        }
+    }
+
+    private fun sampleHoldLine(event: MotionEvent, index: Int) {
+        val line = holdLine ?: return
+        for (h in 0..event.historySize) {
+            val historical = h < event.historySize
+            val x = if (historical) event.getHistoricalX(index, h) else event.getX(index)
+            val y = if (historical) event.getHistoricalY(index, h) else event.getY(index)
+            line.sample(WorldPoint(model.viewport.worldX(x), model.viewport.worldY(y)),
+                if (historical) event.getHistoricalEventTime(h) else event.eventTime)
+        }
+        if (line.active) drawing?.let { recovery[it]?.let(::updateLinePreview) }
+        else {
+            removeCallbacks(holdLineTimer)
+            val remaining = HoldLine.HOLD_MS - (SystemClock.uptimeMillis() - line.stationarySince)
+            postDelayed(holdLineTimer, remaining.coerceAtLeast(0L))
+        }
+    }
+
+    private fun updateLinePreview(copy: Recovery) {
+        val line = holdLine ?: return
+        val inputs = MutableStrokeInputBatch()
+            .add(InputToolType.STYLUS, line.start.x, line.start.y, 0L, pressure = linePressure)
+            .add(InputToolType.STYLUS, line.end.x, line.end.y, 100L, pressure = linePressure)
+        linePreview = Stroke(copy.brush, inputs)
+        invalidate()
+    }
     private var erasing: Long? = null
     private var eraseRadius = 10f
     private var lastX = 0f
@@ -607,6 +653,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                         val strokeId = ink.startStroke(event, id, brush, viewToStroke)
                         recovery[strokeId] = Recovery(operation, brush, event.eventTime, Matrix(viewToStroke), pressureSupported).also { it.record(event, i) }
                         drawing = strokeId
+                        val prefs = model.preferences.value.value
+                        if (prefs.drawShapes) {
+                            holdLine = HoldLine(WorldPoint(x, y), scale / resources.displayMetrics.density, prefs.snapShapes, event.eventTime)
+                            postDelayed(holdLineTimer, HoldLine.HOLD_MS)
+                        }
                     }
                 }
             }
@@ -615,9 +666,12 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 val i = id?.let(event::findPointerIndex) ?: -1
                 if (i >= 0) {
                     drawing?.let { strokeId ->
-                        recovery[strokeId]?.record(event, i)
-                        val prediction = if (predictionValid) predictor.predict() else null
-                        try { ink.addToStroke(event, id!!, strokeId, prediction) } finally { prediction?.recycle() }
+                        sampleHoldLine(event, i)
+                        if (holdLine?.active != true) {
+                            recovery[strokeId]?.record(event, i)
+                            val prediction = if (predictionValid) predictor.predict() else null
+                            try { ink.addToStroke(event, id!!, strokeId, prediction) } finally { prediction?.recycle() }
+                        }
                     }
                     if (erasing != null) eraseSamples(event, i)
                     if (lasso != null || selectionMoving) selectionSamples(event, i)
@@ -629,8 +683,17 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                     if (event.flags and MotionEvent.FLAG_CANCELED != 0) cancelGesture()
                     else {
                         drawing?.let { id ->
-                            recovery[id]?.let { it.record(event, i); it.completed = true }
-                            ink.finishStroke(event, event.getPointerId(i), id)
+                            sampleHoldLine(event, i)
+                            if (holdLine?.active == true) {
+                                recovery.remove(id)?.let { copy ->
+                                    linePreview?.let { model.edits.resolveStroke(copy.operation, EditorStroke(it)) }
+                                        ?: model.edits.cancelStroke(copy.operation)
+                                }
+                                completed.invalidate()
+                            } else {
+                                recovery[id]?.let { it.record(event, i); it.completed = true }
+                                ink.finishStroke(event, event.getPointerId(i), id)
+                            }
                         }
                         if (erasing != null) eraseSamples(event, i)
                         if (lasso != null || selectionMoving) selectionSamples(event, i)
@@ -696,16 +759,19 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         }
         finishFingerGesture(canceled = true)
         val stroke = drawing
+        val wasLine = holdLine?.active == true
         val erase = erasing
         if (selectionMoving || lasso != null) model.cancelSelectionMove()
         resetGesture()
         stroke?.let { id ->
-            ink.cancelStroke(id)
+            if (!wasLine) ink.cancelStroke(id)
             recovery.remove(id)?.let { model.edits.cancelStroke(it.operation) }
         }
         erase?.let { model.edits.endErase(it, canceled = true) }
     }
     private fun resetGesture() {
+        removeCallbacks(holdLineTimer)
+        holdLine = null; linePreview = null
         pointerId = null; activeDevice = null; drawing = null; erasing = null; cursor = null
         model.penButton.endContact()
         model.buttonChanged()
@@ -728,6 +794,23 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
         drawStarFlashes(canvas)
+        linePreview?.let { stroke ->
+            canvas.save()
+            canvas.concat(strokeToView)
+            renderer.draw(canvas, stroke, strokeToView)
+            canvas.restore()
+            holdLine?.let { line ->
+                val label = String.format(java.util.Locale.ROOT, "%.1f°", line.angle)
+                val padding = 8f * resources.displayMetrics.density
+                val textWidth = anglePaint.measureText(label)
+                val boxWidth = textWidth + padding * 2
+                val boxHeight = anglePaint.fontSpacing + padding * 2
+                val left = (model.viewport.screenX(line.end.x) + padding * 2).coerceIn(0f, (width - boxWidth).coerceAtLeast(0f))
+                val top = (model.viewport.screenY(line.end.y) - boxHeight - padding * 2).coerceIn(0f, (height - boxHeight).coerceAtLeast(0f))
+                canvas.drawRoundRect(left, top, left + boxWidth, top + boxHeight, padding, padding, angleBackground)
+                canvas.drawText(label, left + padding, top + padding - anglePaint.fontMetrics.top, anglePaint)
+            }
+        }
         spaceInsertionY?.let {
             val bottom = spaceHandleY()
             val centerX = width / 2f

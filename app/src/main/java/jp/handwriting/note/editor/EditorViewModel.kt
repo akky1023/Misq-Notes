@@ -882,6 +882,8 @@ class EditorViewModel : ViewModel() {
         updatePreferences(mutablePreferences.value.value.copy(pressureCurve = curve))
         brush = createBrush(mutableUi.value); fixedWidthBrush = createBrush(mutableUi.value, pressure = false)
     }
+    internal fun drawShapes(enabled: Boolean) = updatePreferences(mutablePreferences.value.value.copy(drawShapes = enabled))
+    internal fun snapShapes(enabled: Boolean) = updatePreferences(mutablePreferences.value.value.copy(snapShapes = enabled))
     internal fun toolOrder(order: List<EditorTool>) = updatePreferences(mutablePreferences.value.value.copy(toolOrder = order))
     internal fun notePaper(paper: NotePaper) {
         val info = mutableWorkspace.value.current ?: return

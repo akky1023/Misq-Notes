@@ -47,7 +47,7 @@ import jp.handwriting.note.LocalNotebookDark
 internal fun PenDetailsDialog(
     ui: EditorUi, preferences: ToolPreferencesUi,
     onSize: (Int) -> Unit, onTransparency: (Int) -> Unit,
-    onRetry: () -> Unit, onColor: () -> Unit, onDismiss: () -> Unit,
+    onRetry: () -> Unit, onDrawShapes: (Boolean) -> Unit, onSnapShapes: (Boolean) -> Unit, onColor: () -> Unit, onDismiss: () -> Unit,
 ) {
     EditorPopover(
         onDismiss = onDismiss,
@@ -66,6 +66,18 @@ internal fun PenDetailsDialog(
                 SliderNumber(AppMessages.text(R.string.width), ui.size.toInt(), 1..50, "", !ui.busy, onSize, ui.color)
                 if (ui.tool != EditorTool.ERASER) {
                 SliderNumber(AppMessages.text(R.string.opacity), PenStyle.transparency(ui.color), 0..100, "%", !ui.busy, onTransparency, ui.color)
+                }
+                if (ui.tool == EditorTool.PEN || ui.tool == EditorTool.HIGHLIGHTER) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(AppMessages.text(R.string.draw_shapes), Modifier.weight(1f))
+                        Switch(preferences.value.drawShapes, onDrawShapes, enabled = !ui.busy)
+                    }
+                    if (preferences.value.drawShapes) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(AppMessages.text(R.string.snap_shapes), Modifier.weight(1f))
+                            Switch(preferences.value.snapShapes, onSnapShapes, enabled = !ui.busy)
+                        }
+                    }
                 }
                 preferences.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
