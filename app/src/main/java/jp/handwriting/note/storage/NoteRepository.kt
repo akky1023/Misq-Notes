@@ -30,8 +30,9 @@ data class NoteSnapshot(val manifest: NoteManifest, val entries: List<OrderedEdi
 data class LoadedNote(val manifest: NoteManifest, val entries: List<OrderedEdits.Entry<EditorStroke>>, val recovered: Boolean,
     val partial: Boolean = false, val contentBottom: Float = 0f)
 
-class NoteRepository internal constructor(private val files: NoteFiles, private val listCache: NoteListCache? = null,
+class NoteRepository internal constructor(private val files: NoteFiles, listCache: NoteListCache? = null,
     private val persist: (() -> Unit) -> Unit = { it() }) {
+    private val listCache = listCache.takeIf { files.format3 == null }
     internal val usesImmutable get() = files.format3 != null
     @Synchronized internal fun prepareMergePrimary(id: String) {
         files.format3?.takeIf { it.store.current(id) != null }?.export(id, File(files.directory, "$id.misq"))
@@ -57,7 +58,6 @@ class NoteRepository internal constructor(private val files: NoteFiles, private 
     private fun content(note: NoteManifest) = note.copy(info = note.info.copy(updatedAt = 0,
         position = jp.handwriting.note.editor.ViewPosition(), color = 0, size = 0f))
     private val orphanSweeps = mutableMapOf<String, Int>()
-    @Synchronized internal fun releaseWorkingCopies(release: () -> Unit) { release() }
     @Synchronized fun list(): List<NoteSummary> {
         val provisional = files.provisionalVersions().mapValues { it.value.second }
         return ((if (usesImmutable) files.list() else listCache?.list(files::list) ?: files.list()).filter { it.id !in provisional } + provisional.values)

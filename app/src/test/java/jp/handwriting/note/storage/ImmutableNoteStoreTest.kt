@@ -77,7 +77,8 @@ class ImmutableNoteStoreTest {
     }
     private class Memory : PackedFiles {
         val data = linkedMapOf<String, ByteArray>(); var writes = 0; var failAt = Int.MAX_VALUE
-        override fun names() = data.keys.toSet()
+        var inventories = 0
+        override fun names() = data.keys.toSet().also { inventories++ }
         override fun read(name: String) = data.getValue(name).copyOf()
         override fun write(name: String, bytes: ByteArray) {
             check(name !in data)
@@ -86,6 +87,42 @@ class ImmutableNoteStoreTest {
             data[name] = bytes.copyOf()
         }
         override fun delete(name: String) { error("Physical deletion must remain disabled") }
+    }
+    @Test fun syncBatchListsOnceAndSeesItsOwnNewCommitsAndObjects() {
+        val store = ImmutableNoteStore(temp.newFolder())
+        val a = store.importNote(source()); val b = store.importNote(source())
+        val remote = Memory(); val transport = ImmutableNoteTransport(store, remote)
+        transport.withInventorySnapshot {
+            transport.publish(a); transport.publish(b)
+            assertEquals(setOf(a.info.id, b.info.id), transport.noteIds())
+            assertEquals(a.id, transport.heads(a.info.id).single().id)
+            assertEquals(b.id, transport.heads(b.info.id).single().id)
+            transport.verifyRemote(a); transport.verifyRemote(b)
+            assertEquals(1, remote.inventories)
+        }
+        transport.noteIds()
+        assertEquals(2, remote.inventories)
+    }
+    @Test fun failedBatchReleasesInventoryAndTornSealsAreStillRejected() {
+        val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(source())
+        val remote = Memory(); val transport = ImmutableNoteTransport(store, remote)
+        transport.publish(root)
+        assertThrows(IOException::class.java) {
+            transport.withInventorySnapshot { throw IOException("interrupted sync") }
+        }
+        val before = remote.inventories
+        transport.noteIds(); assertEquals(before + 1, remote.inventories)
+        remote.data.keys.filter { it.startsWith("seal-") }.forEach { remote.data[it] = ByteArray(64) { 0 } }
+        val reader = ImmutableNoteTransport(ImmutableNoteStore(temp.newFolder()), remote)
+        assertThrows(IOException::class.java) { reader.withInventorySnapshot { reader.heads(root.info.id) } }
+    }
+    @Test fun migrationInventoryRejectsEmptyPartialAndSubstitutedSourceLists() {
+        val a = UUID.randomUUID().toString(); val b = UUID.randomUUID().toString()
+        requireMigrationInventory(emptySet(), emptySet())
+        requireMigrationInventory(setOf(a, b), setOf(b, a))
+        for (actual in listOf(emptySet(), setOf(a), setOf(a, UUID.randomUUID().toString()))) {
+            assertThrows(IllegalStateException::class.java) { requireMigrationInventory(setOf(a, b), actual) }
+        }
     }
     @Test fun migrationRoundTripsAllHistoricalRecordsAndDoesNotChangeOriginal() {
         val original = source(); val before = original.index(); val changed = before.manifest.strokes[1].copy(storageId = UUID.randomUUID().toString())

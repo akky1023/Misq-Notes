@@ -244,7 +244,7 @@ class EditorViewModel : ViewModel() {
                     withContext(Dispatchers.IO) { viewPositions!!.write(id, position) }
                 }
                 repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
-                    NoteListCache(File(directory, "notes"))) { action ->
+                    if (notebookStorage?.usesImmutable == true) null else NoteListCache(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
                 val noteDirectory = notebookStorage?.noteFiles()?.directory ?: File(directory, "notes")
@@ -284,14 +284,6 @@ class EditorViewModel : ViewModel() {
                     repository!!.updatePreview(snapshot)
                 } }
                 notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
-                notebookStorage?.afterExternalSave = {
-                    // Serialize eviction with repository reads, after provider IO has finished.
-                    // Cleanup failure must not turn a successful external save into a failed one.
-                    withContext(Dispatchers.IO) {
-                        runCatching { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
-                            .onFailure { android.util.Log.w("MisqStorage", "Saved working copies could not be released", it) }
-                    }
-                }
                 saves = SaveQueue(viewModelScope, batchMillis = 500) { request ->
                     val immutable = repository!!.usesImmutable
                     val saved = withContext(Dispatchers.IO) {
@@ -373,7 +365,6 @@ class EditorViewModel : ViewModel() {
                     val candidate = remaining.firstOrNull { it.noteId == current }
                     if (candidate != null && !mutableUi.value.busy && !mutableWorkspace.value.working && !closing &&
                         withContext(Dispatchers.IO) { store.canAutoMerge(candidate) }) beginMerge(candidate, listOf(candidate))
-                    withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 }
             } catch (e: Exception) {
                 mutableConflicts.value = mutableConflicts.value.copy(error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
@@ -562,24 +553,6 @@ class EditorViewModel : ViewModel() {
             } catch (e: Exception) { fail(e) }
         }
     }
-    internal fun migrateStorageFormat() {
-        val storage = notebookStorage ?: return
-        val directory = storageDirectory ?: return
-        if (mutableWorkspace.value.working || mutableWorkspace.value.current != null || storage.usesImmutable) return
-        beginWork(R.string.storage_migrating)
-        viewModelScope.launch {
-            try {
-                check(saves?.flush() != false && librarySaves?.flush() != false && paletteSaves?.flush() != false && preferenceSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
-                previewSaves?.flush()
-                val context = currentCoroutineContext()
-                storage.migrateFormat3 { context.ensureActive() }
-                repository = withContext(Dispatchers.IO) { NoteRepository(storage.noteFiles(), persist = { storage.write(it) }) }
-                conflictStore = NoteConflicts(storage.noteFiles().directory, File(directory, "conflicts"),
-                    remoteContains = storage::contains, ensure = storage::ensure, includeHistory = true)
-                refreshStorageLocation(); refreshList()
-            } catch (e: Exception) { fail(e) }
-        }
-    }
     internal fun resolveStorageSettings(id: String) {
         val storage = notebookStorage ?: return; val directory = storageDirectory ?: return
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
@@ -702,7 +675,6 @@ class EditorViewModel : ViewModel() {
             try {
                 withContext(Dispatchers.IO) { action() }
                 workMessage(R.string.operation_loading_library)
-                withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 refreshList()
             } catch (e: Exception) { fail(e) }
         }

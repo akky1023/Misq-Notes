@@ -20,7 +20,8 @@ internal class Format3Migration(private val directory: File, private val availab
     fun migrate(sources: List<MisqFile>, metadata: Map<String, File>, checkpoint: () -> Unit = {},
         placements: (MisqFile) -> Map<String, StrokePlacement>): ImmutableNoteStore {
         check(!active) { "Storage migration is already active" }
-        require(sources.map { it.index().manifest.info.id }.distinct().size == sources.size)
+        val expectedIds = sources.map { it.index().manifest.info.id }.toSet()
+        require(expectedIds.size == sources.size)
         require(sources.none { it.index().manifest.info.id == Format3Library.SETTINGS_ID }) { "Reserved notebook identity" }
         val bytes = sources.sumOf { it.file.length() } + metadata.values.sumOf { it.length() }
         val required = Math.addExact(Math.multiplyExact(bytes, 3L), 64L * 1024 * 1024)
@@ -71,6 +72,7 @@ internal class Format3Migration(private val directory: File, private val availab
             } finally { work.delete() }
         }
         roots.forEach { checkpoint(); store.install(it) }
+        requireMigrationInventory(expectedIds, store.ids())
         sources.forEach { source -> check(NotebookArchive.digest(source.file) == originalHashes.getValue("${source.index().manifest.info.id}.misq")) { "Source changed before activation" } }
         metadata.forEach { (name, file) -> if (file.exists()) check(NotebookArchive.digest(file) == originalHashes[name]) }
         checkpoint()
@@ -98,4 +100,9 @@ internal class Format3Migration(private val directory: File, private val availab
         backup.allRoots().forEach { backup.verify(it) }
         this.backup(backup, target, checkpoint)
     }
+}
+
+/** Exact identity comparison prevents a partially enumerated library from becoming authoritative. */
+internal fun requireMigrationInventory(expected: Set<String>, actual: Set<String>) {
+    check(expected == actual) { "Migration notebook inventory mismatch; originals have been retained (${expected.size} expected, ${actual.size} found)" }
 }

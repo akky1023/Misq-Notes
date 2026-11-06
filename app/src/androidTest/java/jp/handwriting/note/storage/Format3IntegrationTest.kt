@@ -37,11 +37,12 @@ class Format3IntegrationTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         var tree: Uri? = null
         try {
-            val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
             val files = NoteFiles(File(folder, "notes")); val empty = files.create("three regions")
             val entries = listOf(stroke(1, 100f), stroke(2, 10000f), stroke(3, 20000f))
             val manifest = empty.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
             NoteRepository(files).save(NoteSnapshot(manifest, entries))
+            Format3Migration(folder).migrate(listOf(files.document(manifest.info.id)), emptyMap(), placements = { error("already placed") })
+            val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
             if (external) {
                 @Suppress("DEPRECATION")
                 val selected = provider("test-new-tree")!!.getParcelable<Uri>("tree")!!
@@ -71,7 +72,6 @@ class Format3IntegrationTest {
     }
     @Test fun partialNoteSupportsContinuousSwipePinchAndLoadsFinalViewport() = runBlocking {
         fixture { folder, storage, manifest, _ ->
-            storage.migrateFormat3()
             val models = ViewModelStore()
             val model = withContext(Dispatchers.Main) {
                 ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
@@ -204,7 +204,7 @@ class Format3IntegrationTest {
             }
         }
     }
-    @Test fun editorMigratesSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
+    @Test fun editorSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
         fixture { folder, storage, manifest, _ ->
             val before = NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq"))
             val models = ViewModelStore(); val model = withContext(Dispatchers.Main) {
@@ -215,7 +215,6 @@ class Format3IntegrationTest {
             suspend fun waitFor(check: () -> Boolean) { withTimeout(30000) { while (!check()) delay(10) } }
             try {
                 waitFor { !model.workspace.value.working }
-                withContext(Dispatchers.Main) { model.migrateStorageFormat() }
                 waitFor { !model.workspace.value.working && model.storageLocation.value.format3 }
                 assertEquals(before, NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq")))
                 withContext(Dispatchers.Main) { model.openNote(manifest.info.id) }
@@ -244,12 +243,12 @@ class Format3IntegrationTest {
                 withContext(Dispatchers.Main) { model.closeNote() }
                 waitFor { model.workspace.value.current == null && !model.workspace.value.working }
             } finally { val job = model.viewModelScope.coroutineContext[Job]!!; withContext(Dispatchers.Main) { models.clear() }; job.join() }
-            assertFalse(storage.usesImmutable) // The separate, idle fixture instance was not mutated.
+            assertTrue(storage.usesImmutable)
         }
     }
-    @Test fun externalMigrationRetainsLegacyAndRoundTripsPartialEditsAcrossRestart() = runBlocking {
+    @Test fun externalImportedNoteRetainsOriginalAndRoundTripsPartialEditsAcrossRestart() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.usesImmutable); assertTrue(withTimeout(30000) { storage.awaitSync() })
+            assertTrue(storage.usesImmutable); assertTrue(withTimeout(30000) { storage.awaitSync() })
             val old = File(folder, "notes/${manifest.info.id}.misq"); val expected = NotebookArchive.digest(old)
             val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
             val visible = repository.loadVisible(manifest.info.id, 1f); assertTrue(visible.partial); assertEquals(listOf(1L), visible.entries.map { it.id })
@@ -274,20 +273,9 @@ class Format3IntegrationTest {
             } finally { restartedScope.coroutineContext[Job]!!.cancelAndJoin() }
         }
     }
-    @Test fun cancelledMigrationLeavesLegacyUsableAndActivationAbsent() = runBlocking {
-        fixture { folder, storage, manifest, _ ->
-            val original = File(folder, "notes/${manifest.info.id}.misq"); val expected = NotebookArchive.digest(original)
-            var checkpoints = 0
-            try { storage.migrateFormat3 { if (++checkpoints == 6) throw CancellationException("simulated interruption") }; fail("must interrupt") }
-            catch (_: CancellationException) { }
-            assertFalse(Format3Migration(folder).active); assertFalse(storage.usesImmutable)
-            assertEquals(expected, NotebookArchive.digest(original))
-            assertEquals(3, NoteRepository(storage.noteFiles()).load(manifest.info.id).entries.size)
-        }
-    }
     @Test fun concurrentLibrarySettingsAreRetainedAndCanBeExplicitlyResolved() = runBlocking {
         fixture(external = true) { folder, storage, _, _ ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val library = storage.noteFiles().format3!!; val store = library.store
             val base = store.current(Format3Library.SETTINGS_ID)!!
             val other = ImmutableNoteStore(File(folder, "another-device"))
@@ -314,7 +302,7 @@ class Format3IntegrationTest {
     }
     @Test fun blockedPreviewDownloadDoesNotBlockDurableEditingOrPublishAnOlderPreview() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val root = library.store.current(manifest.info.id)!!
             val firstPack = library.store.find(root, setOf(1)).getValue(1).body.objectId
             assertTrue(File(library.store.directory, "objects/$firstPack").delete())
@@ -335,7 +323,7 @@ class Format3IntegrationTest {
     }
     @Test fun divergentAppendIsResolvedThroughExistingConflictHandlingWithoutLosingEitherParent() = runBlocking {
         fixture(external = true) { folder, storage, manifest, _ ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val store = library.store
             val base = store.current(manifest.info.id)!!
             val other = ImmutableNoteStore(File(folder, "another-device")); Format3Migration(folder).backup(store, other)
@@ -358,7 +346,7 @@ class Format3IntegrationTest {
     }
     @Test fun cancelledViewportDownloadDoesNotHoldTheDurableSaveLock() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val root = library.store.current(manifest.info.id)!!
             val missing = library.store.find(root, setOf(2)).getValue(2).body.objectId
             val body = File(library.store.directory, "objects/$missing"); assertTrue(body.delete())

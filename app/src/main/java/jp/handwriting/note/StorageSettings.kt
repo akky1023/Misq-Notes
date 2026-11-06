@@ -44,11 +44,6 @@ internal fun StorageSettings(model: EditorViewModel) {
                 Text(if (version.local) AppMessages.text(R.string.storage_use_local_settings) else AppMessages.text(R.string.storage_use_other_settings, index + 1))
             }
         }
-    } else {
-        TextButton(enabled = !workspace.working && workspace.current == null, onClick = model::migrateStorageFormat) {
-            Text(AppMessages.text(R.string.storage_migrate_format3))
-        }
-        Text(AppMessages.text(R.string.storage_migrate_format3_help), style = MaterialTheme.typography.bodySmall)
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 }
