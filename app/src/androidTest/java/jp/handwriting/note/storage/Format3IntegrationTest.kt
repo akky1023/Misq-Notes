@@ -14,6 +14,7 @@ import jp.handwriting.note.editor.*
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -112,8 +113,30 @@ class Format3IntegrationTest {
                     touch(move, 500f to 100f)
                     assertEquals(800f, model.viewport.position.top, .01f)
                     touch(up, 500f to 100f)
+                    // No UI turn/IO completion between lifting the finger and
+                    // changing tools or starting the next document operation.
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    val operation = model.edits.reserveStroke()
+                    model.edits.resolveStroke(operation, stroke(operation, 900f).value)
+                    assertTrue(model.ui.value.canUndo)
+                    model.edits.undo()
+                    assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
                 }
                 ready()
+                val loadingInteraction = async(Dispatchers.Main.immediate) {
+                    model.ui.first { it.loadingRegion }
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    // Keep the Ink handoff pending while the old content arrives.
+                    model.edits.reserveStroke()
+                }
                 withContext(Dispatchers.Main) {
                     val display = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                         .getDisplay(android.view.Display.DEFAULT_DISPLAY)
@@ -138,15 +161,41 @@ class Format3IntegrationTest {
                     touch(android.view.MotionEvent.ACTION_MOVE, 350f, 650f)
                     assertEquals(1.5f, model.viewport.position.zoom, .01f)
                     touch(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT), 350f, 650f)
-                    // Continue panning with the remaining finger to an unread region.
+                    touch(android.view.MotionEvent.ACTION_UP, 350f)
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.HIGHLIGHTER)
+                    assertEquals(EditorTool.HIGHLIGHTER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    touch(android.view.MotionEvent.ACTION_DOWN, 350f)
+                    // Start another pan immediately, this time to an unread region.
                     touch(android.view.MotionEvent.ACTION_MOVE, 350f, y = -13000f)
                     touch(android.view.MotionEvent.ACTION_UP, 350f, y = -13000f)
                     assertFalse(model.viewportGestureActive)
+                }
+                val drawing = withTimeout(30000) { loadingInteraction.await() }
+                withContext(Dispatchers.Main) {
+                    assertTrue(model.ui.value.loadingRegion)
+                    assertFalse(model.edits.snapshot().any { it.id == 2L })
+                    model.edits.resolveStroke(drawing, stroke(drawing, 10100f).value)
+                    assertTrue(model.ui.value.canUndo)
+                }
+                withTimeout(30000) {
+                    while (model.edits.snapshot().none { it.id == 2L }) delay(10)
                 }
                 ready()
                 assertTrue(model.edits.snapshot().any { it.id == 2L })
                 assertFalse(model.edits.snapshot().any { it.id == 3L })
                 assertNull(model.workspace.value.error)
+                withContext(Dispatchers.Main) {
+                    model.edits.undo()
+                    assertTrue(model.edits.snapshot().any { it.id == 2L })
+                    assertFalse(model.edits.snapshot().any { it.id == drawing })
+                    model.fitWidth()
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                }
                 withContext(Dispatchers.Main) { model.closeNote() }
                 ready()
             } finally {

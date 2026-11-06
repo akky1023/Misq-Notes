@@ -1140,8 +1140,7 @@ class EditorViewModel : ViewModel() {
     }
     private fun requestVisibleRegion() {
         val base = lazyBase ?: return
-        // Loading marks the editor busy. Starting it between finger samples would
-        // cancel the pan/pinch and restore the gesture's original viewport.
+        // Load the final viewport rather than cancel/restart IO for every sample.
         if (restoring || closing || hydratingAll || viewportGestureActive) return
         val top = (viewport.position.top - 500f).coerceAtLeast(0f)
         val bottom = viewport.bottom + 500f
@@ -1150,8 +1149,10 @@ class EditorViewModel : ViewModel() {
         stopBackgroundLoading()
         val run = ++regionRun
         regionJob?.cancel()
-        regionLoading = true; regionFailed = false
-        mutableUi.value = mutableUi.value.copy(loadingRegion = true, busy = true, canUndo = false, canRedo = false)
+        // A viewport change usually stays in already loaded content. Checking the
+        // repository must not disable tools/input while waiting for its IO lock.
+        regionLoading = false; regionFailed = false
+        publish()
         regionJob = viewModelScope.launch {
             try {
                 do {
@@ -1159,16 +1160,23 @@ class EditorViewModel : ViewModel() {
                     val loaded = hydrated.toSet()
                     val needed = withContext(Dispatchers.IO) { repository!!.regionPending(base.info.id, requestedTop, requestedBottom, loaded) }
                     if (needed) {
+                        if (lazyBase !== base || closing) return@launch
                         regionLoading = true; publish()
                         val entries = withContext(Dispatchers.IO) {
                             val context = currentCoroutineContext()
                             repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) { context.ensureActive() }
                         }
-                        while (edits.busy) kotlinx.coroutines.delay(16)
-                        if (lazyBase !== base || closing) return@launch
-                        val added = entries.filter { it.id !in hydrated }
-                        hydrated.addAll(added.map { it.id }); hydrateRead(added)
-                        if (base.strokes.size == hydrated.size) lazyBase = null
+                        for (batch in entries.chunked(32)) {
+                            // Reading never locks the editor. Defer only publishing
+                            // incoming content so an active contact keeps its targets.
+                            while (edits.busy || viewportGestureActive || selectionWorking || selectionGesture || insertingSpace)
+                                kotlinx.coroutines.delay(16)
+                            if (lazyBase !== base || closing) return@launch
+                            val added = batch.filter { it.id !in hydrated }
+                            hydrated.addAll(added.map { it.id }); hydrateRead(added)
+                            if (base.strokes.size == hydrated.size) lazyBase = null
+                            kotlinx.coroutines.yield()
+                        }
                     }
                 } while (requestedTop != regionTop || requestedBottom != regionBottom)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -1195,7 +1203,8 @@ class EditorViewModel : ViewModel() {
                 }
                 check(entries.isNotEmpty()) { "Referenced notebook content is missing" }
                 for (batch in entries.chunked(128)) {
-                    while (edits.busy) kotlinx.coroutines.delay(16)
+                    while (edits.busy || viewportGestureActive || selectionWorking || selectionGesture || insertingSpace)
+                        kotlinx.coroutines.delay(16)
                     check(lazyBase === base && !closing) { AppMessages.text(R.string.wait_note) }
                     val added = batch.filter { it.id !in hydrated }
                     hydrated.addAll(added.map { it.id }); hydrateRead(added)
@@ -1305,9 +1314,11 @@ class EditorViewModel : ViewModel() {
             loadingRegion = regionLoading,
             loadingRest = backgroundLoading,
             partialContent = lazyBase != null,
-            busy = edits.busy || selectionWorking || selectionGesture || regionLoading || regionFailed,
-            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
-            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
+            // IO progress/errors are separate from document operations. A slow or
+            // failed read must never disable navigation, tools or new handwriting.
+            busy = edits.busy || selectionWorking || selectionGesture,
+            canUndo = edits.canUndo && !selectionWorking && !selectionGesture,
+            canRedo = edits.canRedo && !selectionWorking && !selectionGesture,
             selectionCount = selection.size,
         )
         updateViewportOverlay()
