@@ -5,6 +5,11 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+    # Release Please only updates these files. Validate again before publishing.
+    paths-ignore:
+      - '.release-please-manifest.json'
+      - 'CHANGELOG.md'
+      - 'version.txt'
   workflow_dispatch:
 
 permissions:
