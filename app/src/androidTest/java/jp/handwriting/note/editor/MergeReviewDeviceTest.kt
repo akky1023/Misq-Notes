@@ -156,10 +156,11 @@ class MergeReviewDeviceTest {
         val cache = File(fixture.root, "merge-reviews")
         val createdAt = fixture.original.info.createdAt
         val bHash = ContentHash.digest(fixture.b.readBytes())
-        MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, cache).use { session ->
-            assertEquals(1, session.plan.unchanged.size)
-            assertEquals(2, session.plan.changes.size)
-            val result = session.save(File(fixture.root, "notes"), MergeStrength.CAUTIOUS, emptyMap(), true, "merged")
+        MergeReviewSession.prepareAll(listOf(fixture.conflict), listOf(fixture.a, fixture.b), cache).use { session ->
+            assertEquals(1, session.multiPlan.unchanged.size)
+            assertEquals(2, session.multiPlan.changes.size)
+            val result = session.saveResolved(File(fixture.root, "notes"), MergeStrength.CAUTIOUS,
+                session.multiPlan.steps(MergeStrength.CAUTIOUS).associate { it.key to it.suggested }, "merged")
             assertEquals(3, result.strokes.size)
             assertEquals(3, MisqFile(File(fixture.root, "notes/${result.info.id}.misq")).readManifest().manifest.strokes.size)
         }
@@ -171,7 +172,7 @@ class MergeReviewDeviceTest {
     }
     @Test fun overwriteRecordsRejectedHeadsSoSyncCannotRestoreDeletedInk() = kotlinx.coroutines.runBlocking {
         val fixture = fixture(deleteAgainstMove = true)
-        MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, File(fixture.root, "merge-reviews")).use { session ->
+        MergeReviewSession.prepareAll(listOf(fixture.conflict), listOf(fixture.a, fixture.b), File(fixture.root, "merge-reviews")).use { session ->
             val decisions = session.multiPlan.steps(MergeStrength.CAUTIOUS).associate { it.key to setOf(0) }
             val result = session.saveResolved(File(fixture.root, "notes"), MergeStrength.CAUTIOUS, decisions, fixture.original.info.title)
             assertTrue(result.strokes.isEmpty())
@@ -186,22 +187,24 @@ class MergeReviewDeviceTest {
     }
     @Test fun thumbnailCacheUpdateDuringReviewDoesNotInvalidateUnchangedNote() = kotlinx.coroutines.runBlocking {
         val fixture = fixture()
-        MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, File(fixture.root, "merge-reviews")).use { session ->
+        MergeReviewSession.prepareAll(listOf(fixture.conflict), listOf(fixture.a, fixture.b), File(fixture.root, "merge-reviews")).use { session ->
             MisqFile(fixture.a).saveThumbnail(byteArrayOf(1, 2, 3))
-            val result = session.save(File(fixture.root, "notes"), MergeStrength.CAUTIOUS, emptyMap(), true, fixture.original.info.title)
+            val result = session.saveResolved(File(fixture.root, "notes"), MergeStrength.CAUTIOUS,
+                session.multiPlan.steps(MergeStrength.CAUTIOUS).associate { it.key to it.suggested }, fixture.original.info.title)
             assertEquals(fixture.original.info.id, result.info.id)
             assertEquals(3, result.strokes.size)
         }
     }
     @Test fun changedOriginalCannotBeOverwrittenByStaleReview() = kotlinx.coroutines.runBlocking {
         val fixture = fixture()
-        MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, File(fixture.root, "merge-reviews")).use { session ->
+        MergeReviewSession.prepareAll(listOf(fixture.conflict), listOf(fixture.a, fixture.b), File(fixture.root, "merge-reviews")).use { session ->
             val current = MisqFile(fixture.a)
             val edited = fixture.original.copy(info = fixture.original.info.copy(title = "edited during review"))
             current.save(edited) { error("No new payload") }
             val before = ContentHash.digest(fixture.a.readBytes())
             try {
-                session.save(File(fixture.root, "notes"), MergeStrength.CAUTIOUS, emptyMap(), true, "merged")
+                session.saveResolved(File(fixture.root, "notes"), MergeStrength.CAUTIOUS,
+                    session.multiPlan.steps(MergeStrength.CAUTIOUS).associate { it.key to it.suggested }, "merged")
                 fail("A stale review must not overwrite the original")
             } catch (_: IllegalStateException) { }
             assertEquals(before, ContentHash.digest(fixture.a.readBytes()))
@@ -222,7 +225,8 @@ class MergeReviewDeviceTest {
             waitFor { model.mergeReview.value.session != null || model.mergeReview.value.error != null }
             assertNull(model.mergeReview.value.error)
             val session = model.mergeReview.value.session!!
-            assertEquals(3, session.plan.result(MergeStrength.CAUTIOUS, emptyMap(), true).size)
+            assertEquals(3, session.multiPlan.result(MergeStrength.CAUTIOUS,
+                session.multiPlan.steps(MergeStrength.CAUTIOUS).associate { it.key to it.suggested }).size)
             waitFor { find(AppMessages.text(R.string.merge_canvas, "0")) != null }
             for (label in listOf("変更箇所", "Changes")) assertNull(find(label))
             for (label in listOf("重ね合わせ", "Overlay")) assertNull(find(label))
@@ -523,7 +527,7 @@ class MergeReviewDeviceTest {
     }
     @Test fun activeChangesHaveGreenRedAndBlueMarksAndFinalPreviewIsClean() = kotlinx.coroutines.runBlocking {
         val fixture = fixture(deleteAgainstMove = true)
-        MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, File(fixture.root, "render-reviews")).use { session ->
+        MergeReviewSession.prepareAll(listOf(fixture.conflict), listOf(fixture.a, fixture.b), File(fixture.root, "render-reviews")).use { session ->
             val step = session.multiPlan.steps(MergeStrength.CAUTIOUS).single()
             fun count(bitmap: android.graphics.Bitmap, color: Int): Int {
                 var count = 0
@@ -570,8 +574,8 @@ class MergeReviewDeviceTest {
             waitFor { model.mergeReview.value.session != null || model.mergeReview.value.error != null }
             assertNull(model.mergeReview.value.error)
             val session = model.mergeReview.value.session!!
-            assertNull(session.plan.groups(MergeStrength.AGGRESSIVE).single().suggested)
-            assertFalse(session.plan.groups(MergeStrength.AGGRESSIVE).single().bothAllowed)
+            assertTrue(session.multiPlan.steps(MergeStrength.AGGRESSIVE).single().suggested.isEmpty())
+            assertFalse(session.multiPlan.steps(MergeStrength.AGGRESSIVE).single().accepts(setOf(0, 1)))
             scenario.onActivity { model.saveResolvedMerge(MergeStrength.AGGRESSIVE, emptyMap()) }
             assertNull(model.workspace.value.current)
             scenario.onActivity { model.saveResolvedMerge(MergeStrength.CAUTIOUS, emptyMap()) }

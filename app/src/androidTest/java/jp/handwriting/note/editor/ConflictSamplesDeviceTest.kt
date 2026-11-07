@@ -118,16 +118,16 @@ class ConflictSamplesDeviceTest {
                 val checker = NoteConflicts(publish, File(stage, "check-$number"))
                 val conflict = checker.scan().single { it.file == alias }
                 assertEquals("$number auto fast-forward", number in setOf(1, 2, 9), checker.canAutoMerge(conflict))
-                MergeReviewSession.prepare(conflict, original to alias, File(stage, "reviews")).use { session ->
-                    val cautious = session.plan.groups(MergeStrength.CAUTIOUS)
-                    val standard = session.plan.groups(MergeStrength.STANDARD)
-                    val aggressive = session.plan.groups(MergeStrength.AGGRESSIVE)
+                MergeReviewSession.prepareAll(listOf(conflict), listOf(original, alias), File(stage, "reviews")).use { session ->
+                    val cautious = session.multiPlan.steps(MergeStrength.CAUTIOUS)
+                    val standard = session.multiPlan.steps(MergeStrength.STANDARD)
+                    val aggressive = session.multiPlan.steps(MergeStrength.AGGRESSIVE)
                     when (number) {
-                        3, 6, 10 -> assertTrue(cautious.all { it.suggested != null })
-                        4 -> { assertTrue(cautious.any { it.suggested == null }); assertTrue(aggressive.all { it.suggested != null }) }
-                        5 -> { assertTrue(cautious.any { it.suggested == null }); assertTrue(standard.all { it.suggested != null }) }
-                        7, 8, 11, 12, 14 -> assertTrue(aggressive.any { it.suggested == null })
-                        9 -> assertTrue(session.plan.changes.isEmpty())
+                        3, 6, 10 -> assertTrue(cautious.all { it.suggested.isNotEmpty() })
+                        4 -> { assertTrue(cautious.any { it.suggested.isEmpty() }); assertTrue(aggressive.all { it.suggested.isNotEmpty() }) }
+                        5 -> { assertTrue(cautious.any { it.suggested.isEmpty() }); assertTrue(standard.all { it.suggested.isNotEmpty() }) }
+                        7, 8, 11, 12, 14 -> assertTrue(aggressive.any { it.suggested.isEmpty() })
+                        9 -> assertTrue(session.multiPlan.changes.isEmpty())
                     }
                 }
                 if (number == 13) {

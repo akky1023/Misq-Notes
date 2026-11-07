@@ -2,6 +2,13 @@ package jp.handwriting.note.storage
 
 import jp.handwriting.note.editor.StrokeIndex
 
+internal enum class MergeStrength { MANUAL, CAUTIOUS, STANDARD, AGGRESSIVE }
+internal enum class MergeKind { ADD, DELETE, EDIT, TITLE, PAPER }
+internal data class MergeValue(val entity: String, val blob: String, val hash: String,
+    val order: Long, val source: Int) { val key get() = "$entity:$hash" }
+internal fun mergeBounds(a: StrokeIndex.Bounds, b: StrokeIndex.Bounds) = StrokeIndex.Bounds(
+    minOf(a.left, b.left), minOf(a.top, b.top), maxOf(a.right, b.right), maxOf(a.bottom, b.bottom))
+
 internal data class MultiMergeChange(val key: String, val kind: MergeKind, val base: MergeValue?,
     val versions: List<MergeValue?>, val changed: Set<Int>, val area: StrokeIndex.Bounds?, val uncertain: Boolean) {
     val combines get() = kind !in listOf(MergeKind.TITLE, MergeKind.PAPER) &&
@@ -69,7 +76,7 @@ internal class MultiMergePlan private constructor(val indexes: List<MisqFile.Ind
                 val entity = index.entities.getValue(ref.id)
                 val event = histories[source][entity].orEmpty().lastOrNull { it.blob == ref.storageId }
                 MergeValue(entity, ref.storageId, index.records.getValue(ref.storageId).hash,
-                    if (source == 0) MergeChoice.A else MergeChoice.B, event?.order ?: ref.id, event?.at ?: index.manifest.info.updatedAt, source)
+                    event?.order ?: ref.id, source)
             } }
             val maps = live.map { it.associateBy { value -> value.entity } }
             val unchanged = mutableListOf<MergeValue>(); val changes = mutableListOf<MultiMergeChange>()
@@ -83,7 +90,7 @@ internal class MultiMergePlan private constructor(val indexes: List<MisqFile.Ind
                 val ancestor = common.singleOrNull()
                 val base = ancestor?.blob?.let { blob -> indexes.indexOfFirst { blob in it.records }.takeIf { it >= 0 }?.let { source ->
                     MergeValue(entity, blob, indexes[source].records.getValue(blob).hash,
-                        if (source == 0) MergeChoice.A else MergeChoice.B, ancestor.order, ancestor.at, source)
+                        ancestor.order, source)
                 } }
                 base?.let { values.putIfAbsent(it.key, it) }
                 val deleted = versions.indices.any { versions[it] == null && logs[it].isNotEmpty() }

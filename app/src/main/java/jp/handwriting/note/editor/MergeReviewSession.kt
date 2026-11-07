@@ -30,8 +30,6 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
     private val a get() = readers[0]
     lateinit var multiPlan: MultiMergePlan
         private set
-    lateinit var plan: StrokeMergePlan
-        private set
     private val decoded = object : LinkedHashMap<String, EditorStroke>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, EditorStroke>?) = size > 128
     }
@@ -146,15 +144,12 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
     }
     fun saveResolved(notes: File, strength: MergeStrength, decisions: Map<String, Set<Int>>, title: String): NoteManifest =
         writeResult(notes, multiPlan.result(strength, decisions), title, multiPlan.paper(strength, decisions))
-    fun save(notes: File, strength: MergeStrength, overrides: Map<String, MergeChoice>, aOnTop: Boolean, title: String): NoteManifest {
-        return writeResult(notes, plan.result(strength, overrides, aOnTop), title, plan.paper(plan.decisions(strength, overrides)))
-    }
     private fun writeResult(notes: File, values: List<MergeValue>, title: String, paper: NotePaper): NoteManifest {
         check(!closed)
-        val original = plan.a.manifest
+        val expected = multiPlan.indexes.first()
+        val original = expected.manifest
         val id = original.info.id
         val destination = File(notes, "$id.misq")
-        val expected = plan.a
         fun unchanged() = check(if (provisional) !destination.exists() else destination.isFile && runCatching {
             val current = MisqFile(destination).index()
             current.manifest == expected.manifest && current.events == expected.events &&
@@ -165,7 +160,7 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
         unchanged()
         val used = mutableSetOf<String>()
         val entities = mutableMapOf<Long, String>()
-        val originalIds = plan.a.entities.entries.associate { it.value to it.key }
+        val originalIds = expected.entities.entries.associate { it.value to it.key }
         var nextId = original.nextId
         val refs = values.map { value ->
             // Choosing two edits of one stroke intentionally creates a second independent stroke.
@@ -192,8 +187,6 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
     @Synchronized override fun close() { closed = true; decoded.clear(); folder.deleteRecursively() }
 
     companion object {
-        suspend fun prepare(conflict: NoteConflict, sources: Pair<File, File>, cache: File): MergeReviewSession =
-            prepareAll(listOf(conflict), listOf(sources.first, sources.second), cache)
         suspend fun prepareAll(conflicts: List<NoteConflict>, sources: List<File>, cache: File): MergeReviewSession {
             require(sources.size == if (conflicts.first().provisional) maxOf(2, conflicts.size) else conflicts.size + 1)
             val folder = File(cache, "merge-review-${UUID.randomUUID()}").apply { check(mkdirs()) }
@@ -215,12 +208,7 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
             try {
                 val readers = sources.mapIndexed { i, file -> MisqFile(snapshot(file, "$i.misq"), readOnlyAlias = true) }
                 val session = MergeReviewSession(conflicts, folder, readers)
-                val ai = readers[0].index(); val bi = readers[1].index()
                 val job = currentCoroutineContext()
-                session.plan = StrokeMergePlan.build(ai, bi) { value ->
-                    job.ensureActive()
-                    runCatching { session.box(value) }.getOrNull()
-                }
                 session.multiPlan = MultiMergePlan.build(readers.map { it.index() }) { value ->
                     job.ensureActive(); session.box(value)
                 }
