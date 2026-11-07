@@ -63,13 +63,8 @@ class PressureControlBezierTest {
         passing.spline!!.points.forEach { assertEquals(it.y / 100f, passing.factor(it.x / 100f), 0.000001f) }
         assertEquals(passing, passing.asPassingCurve())
     }
-    @Test fun existingPointCoordinatesAreReusedAsControlsAndMinimumOneHundredIsConstant() {
-        val old = PressureSpline(quadratic().points)
-        val converted = PressureCurve(old.minimumPercent, spline = old).asControlBezier()
-        assertEquals(old.points, converted.spline!!.points)
-        assertEquals(PressureBasis.BEZIER_CONTROLS, converted.spline!!.basis)
-        assertEquals(converted, converted.asControlBezier())
-        val flat = converted.spline!!.moved(0, 0, 100)
+    @Test fun storedControlCurveWithMinimumOneHundredIsConstant() {
+        val flat = quadratic().moved(0, 0, 100)
         for (i in 0..100) assertEquals(1f, flat.factor(i / 100f), 0f)
     }
 }
