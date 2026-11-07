@@ -36,7 +36,6 @@ import kotlin.math.hypot
 import kotlinx.coroutines.*
 
 class InkCanvasView(context: Context, private val model: EditorViewModel, renderAppendLimit: Int = StrokeRenderCache.APPEND_SIZE, private val useTileCache: Boolean = true) : FrameLayout(context) {
-    companion object { const val LOGICAL_WIDTH = Viewport.WIDTH; const val ERASER_RADIUS = 10f }
     private val strokeToView = Matrix()
     private val viewToStroke = Matrix()
     private var scale = 1f
