@@ -17,10 +17,6 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.ViewModelProvider
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import jp.handwriting.note.editor.EditorViewModel
 import jp.handwriting.note.editor.InkCanvasView
 import jp.handwriting.note.editor.StylusNavigationGuard
