@@ -16,9 +16,7 @@ import java.io.*
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
-import android.graphics.RectF
 import androidx.core.graphics.createBitmap
-import jp.handwriting.note.editor.PaperRenderer
 import jp.handwriting.note.editor.EmbeddedImages
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
