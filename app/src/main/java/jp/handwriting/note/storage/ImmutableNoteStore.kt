@@ -31,9 +31,9 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
     private fun uuid(id: String) = id.also { require(UUID.fromString(it).toString() == it) }
     private fun objectFile(id: String) = File(objects, id.also { require(it.matches(OBJECT)) })
     fun objectNames(): Set<String> = objects.listFiles().orEmpty().filter { it.isFile && it.name.matches(OBJECT) }.map { it.name }.toSet()
-    fun objectBytes(id: String): ByteArray = openObject(id).use { it.readBytes() }.also { require(NotebookArchive.digest(it) == id.removePrefix("o-")) { "Damaged format 3 object: $id" } }
+    fun objectBytes(id: String): ByteArray = openObject(id).use { it.readBytes() }.also { require(ContentHash.digest(it) == id.removePrefix("o-")) { "Damaged format 3 object: $id" } }
     fun put(bytes: ByteArray): String {
-        val id = "o-${NotebookArchive.digest(bytes)}"; val file = objectFile(id)
+        val id = "o-${ContentHash.digest(bytes)}"; val file = objectFile(id)
         if (file.exists()) { check(objectBytes(id).contentEquals(bytes)); return id }
         val temporary = File(objects, ".write-${UUID.randomUUID()}")
         try {
@@ -45,7 +45,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
     }
     fun importObject(id: String, input: InputStream, checkpoint: () -> Unit = {}) {
         val file = objectFile(id)
-        if (file.exists()) { require(NotebookArchive.digest(file) == id.removePrefix("o-")); return }
+        if (file.exists()) { require(ContentHash.digest(file) == id.removePrefix("o-")); return }
         val temporary = File(objects, ".receive-${UUID.randomUUID()}")
         try {
             FileOutputStream(temporary).use { output ->
@@ -53,7 +53,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
                 while (true) { checkpoint(); val n = input.read(buffer); if (n < 0) break; bytes += n; require(bytes <= MAX_RECORD.toLong() + 8 * 1024 * 1024); output.write(buffer, 0, n) }
                 output.fd.sync()
             }
-            require(NotebookArchive.digest(temporary) == id.removePrefix("o-")) { "Damaged incoming object" }
+            require(ContentHash.digest(temporary) == id.removePrefix("o-")) { "Damaged incoming object" }
             Files.move(temporary.toPath(), file.toPath(), ATOMIC_MOVE)
             syncNoteDirectory(objects)
         } finally { temporary.delete() }
@@ -236,12 +236,12 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
             records.forEach { (id, bytes) -> uuid(id); require(bytes.size in 1..MAX_RECORD); out.writeUTF(id); out.writeInt(bytes.size); out.write(bytes) }
             out.flush(); raw.fd.sync()
         } }
-        val name = "o-${NotebookArchive.digest(temporary)}"; val target = objectFile(name)
-        if (target.exists()) check(NotebookArchive.digest(target) == name.removePrefix("o-"))
+        val name = "o-${ContentHash.digest(temporary)}"; val target = objectFile(name)
+        if (target.exists()) check(ContentHash.digest(target) == name.removePrefix("o-"))
         else { Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE); syncNoteDirectory(objects) }
         name
         } finally { temporary.delete() }
-        return records.mapValues { (_, bytes) -> Body(id, bytes.size, NotebookArchive.digest(bytes)) }
+        return records.mapValues { (_, bytes) -> Body(id, bytes.size, ContentHash.digest(bytes)) }
     }
     private fun readBodies(wanted: Map<String, Body>, checkpoint: () -> Unit = {}): Map<String, ByteArray> {
         val result = mutableMapOf<String, ByteArray>()
@@ -260,7 +260,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
                     val ref = requested[id]
                     if (ref != null) {
                         require(ref.size == size)
-                        val bytes = ByteArray(size).also(input::readFully); require(NotebookArchive.digest(bytes) == ref.hash)
+                        val bytes = ByteArray(size).also(input::readFully); require(ContentHash.digest(bytes) == ref.hash)
                         result[id] = bytes
                     } else {
                         var remaining = size
@@ -269,7 +269,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
                 }
                 require(input.read() == -1)
             } }
-            require(NotebookArchive.hex(digest.digest()) == objectId.removePrefix("o-")) { "Damaged body pack" }
+            require(ContentHash.hex(digest.digest()) == objectId.removePrefix("o-")) { "Damaged body pack" }
             require(requested.keys.all { it in result })
         }
         return result
@@ -399,7 +399,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
     fun resolve(base: Root, parents: List<String>): Root = publish(base.copy(id = "", parents = parents.distinct().sorted()))
     fun equivalent(a: Root, b: Root): Boolean = a.deleted == b.deleted && a.info.id == b.info.id && a.info.title == b.info.title &&
         a.info.createdAt == b.info.createdAt && a.info.paper == b.info.paper && a.nextId == b.nextId && a.lastOrder == b.lastOrder && a.pages == b.pages && a.history == b.history && a.tombstones == b.tombstones
-    fun previewKey(root: Root) = NotebookArchive.digest((root.info.paper.color.toString() + root.pages.joinToString { it.objectId }).toByteArray())
+    fun previewKey(root: Root) = ContentHash.digest((root.info.paper.color.toString() + root.pages.joinToString { it.objectId }).toByteArray())
     fun thumbnail(root: Root): ByteArray? = root.thumbnail?.let(::objectBytes)
     fun saveThumbnail(root: Root, bytes: ByteArray): Root = publish(root.copy(id = "", thumbnail = put(bytes), thumbnailKey = previewKey(root), parents = listOf(root.id)))
     /** Expensive verification is explicit, never part of opening a viewport. */

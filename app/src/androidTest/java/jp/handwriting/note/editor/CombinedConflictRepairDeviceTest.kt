@@ -24,7 +24,7 @@ class CombinedConflictRepairDeviceTest {
         val oldTimes = listOf(4102444800000L, 1793379081442L, 1793379081478L, 1793379081501L)
         val notes = File(context.filesDir, "notes")
         val originals = (1..4).map { File(notes, "総合サンプル-別版$it-11645a9a.misq") }
-        val before = originals.map(NotebookArchive::digest)
+        val before = originals.map(ContentHash::digest)
         val scratch = File(context.cacheDir, "combined-repair-${UUID.randomUUID()}").apply { check(mkdirs()) }
         val backup = File(context.getExternalFilesDir(null), scratch.name).apply { check(mkdirs()) }
         try {
@@ -40,7 +40,7 @@ class CombinedConflictRepairDeviceTest {
                 assertTrue(current.events.count { it.parents.isEmpty() && it.at == correctTime } >= 20)
                 val saved = File(backup, file.name)
                 file.copyTo(saved)
-                assertEquals(before[index], NotebookArchive.digest(saved))
+                assertEquals(before[index], ContentHash.digest(saved))
                 val staged = File(scratch, "branch-$index.tmp")
                 file.copyTo(staged)
                 val target = MisqFile(staged)
@@ -67,7 +67,7 @@ class CombinedConflictRepairDeviceTest {
                 MisqFile(File(isolated, "$noteId.misq")).validate()
                 assertEquals(noteId, result.info.id)
             }
-            val repository = NoteRepository(NoteFiles(isolated))
+            val repository = NoteRepository(NoteFiles.open(isolated))
             repository.delete(noteId)
             assertTrue(repository.list().isEmpty())
             assertTrue(store.scan().isEmpty())
@@ -79,7 +79,7 @@ class CombinedConflictRepairDeviceTest {
             assertTrue(repository.list().isEmpty())
             assertTrue(store.scan().isEmpty())
             // Publish only after every staged file passed final-save/deletion checks.
-            originals.forEachIndexed { index, file -> assertEquals(before[index], NotebookArchive.digest(file)) }
+            originals.forEachIndexed { index, file -> assertEquals(before[index], ContentHash.digest(file)) }
             staged.forEachIndexed { index, file ->
                 val temporary = File(notes, ".sample-repair-${UUID.randomUUID()}.tmp")
                 try {
@@ -91,7 +91,7 @@ class CombinedConflictRepairDeviceTest {
             }
             assertEquals(4, NoteConflicts(notes, File(scratch, "verify")).scan().count { it.noteId == noteId })
             File(backup, "verified.txt").writeText("Repaired only ancestor $ancestor to $correctTime.\n" +
-                originals.mapIndexed { index, file -> "${file.name}: ${before[index]} -> ${NotebookArchive.digest(file)}" }.joinToString("\n"))
+                originals.mapIndexed { index, file -> "${file.name}: ${before[index]} -> ${ContentHash.digest(file)}" }.joinToString("\n"))
         } finally { scratch.deleteRecursively() }
     }
 }

@@ -28,7 +28,7 @@ class OptimizationDeviceBenchmarkTest {
         check(context.packageName == "net.neomenia.misqnotes.probe")
         val directory = File(context.cacheDir, "optimization-${UUID.randomUUID()}").also { check(it.mkdirs()) }
         try {
-            val files = NoteFiles(File(directory, "notes"))
+            val files = NoteFiles.open(File(directory, "notes"))
             val empty = files.create("synthetic benchmark")
             val refs = (1L..4096L).map { StrokeRef(it, UUID.randomUUID().toString()) }
             val placements = refs.associate { it.storageId to StrokePlacement(0f, 0f, 20f) }

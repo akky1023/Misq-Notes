@@ -76,13 +76,15 @@ class RealNoteFrameTest {
         var model: EditorViewModel? = null
         val thread = HandlerThread("frame-metrics").apply { start() }
         try {
-            val remote = MisqDocumentFiles(context.contentResolver, Uri.parse(tree)).also { it.names() }
-            val source = File(folder, "$note.misq")
-            remote.openRead(source.name).use { input -> source.outputStream().use { input.copyTo(it, 65536) } }
-            val sourceHash = NotebookArchive.digest(source)
-            assertEquals(title, MisqFile(source).summary().title)
             val store = ImmutableNoteStore(File(folder, "format3-${UUID.randomUUID()}"))
-            Format3Library(store, File(folder, "exports").also { it.mkdirs() }).imported(source)
+            val remote = PackedDocumentFiles(context.contentResolver, Uri.parse(tree), "misq-v3")
+            val transport = ImmutableNoteTransport(store, remote)
+            val received = transport.withInventorySnapshot { transport.heads(note!!).single() }
+            store.install(received)
+            val source = File(folder, "$note.misq")
+            store.export(received, source)
+            val sourceHash = ContentHash.digest(source)
+            assertEquals(title, received.info.title)
             NoteFiles.atomicWrite(File(folder, ".format3-active"), JSONObject().put("format", 3).put("minWriter", 3)
                 .put("directory", store.directory.name).toString().toByteArray())
             val editor = withContext(Dispatchers.Main) {
@@ -313,7 +315,7 @@ class RealNoteFrameTest {
                     gfx("writing")
                 }
             }
-            assertEquals(sourceHash, NotebookArchive.digest(source))
+            assertEquals(sourceHash, ContentHash.digest(source))
             report("FRAME_SOURCE_COPY unchanged=true")
         } finally {
             val job = model?.viewModelScope?.coroutineContext?.get(Job)

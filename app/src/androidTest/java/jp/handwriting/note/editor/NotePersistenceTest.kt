@@ -28,9 +28,9 @@ class NotePersistenceTest {
     @Test fun repositoryReloadsInkBrushStyleOrderAndViewport() {
         val root = folder()
         try {
-            val repo = NoteRepository(NoteFiles(root))
+            val repo = NoteRepository(NoteFiles.open(root))
             val empty = repo.create("講義ノート")
-            assertNotNull(android.graphics.BitmapFactory.decodeFile(NoteRepository(NoteFiles(root)).preview(empty.info.id).path))
+            assertNotNull(android.graphics.BitmapFactory.decodeFile(NoteRepository(NoteFiles.open(root)).preview(empty.info.id).path))
             val entries = listOf(
                 OrderedEdits.Entry(2L, stroke(0xFF205EB8.toInt())),
                 OrderedEdits.Entry(7L, stroke(0xFFB93838.toInt(), true)),
@@ -40,7 +40,7 @@ class NotePersistenceTest {
             val manifest = empty.copy(info = empty.info.copy(position = ViewPosition(3f, 200f, 11800f), size = 100f, color = 0x80123456.toInt()),
                 strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 10)
             repo.save(NoteSnapshot(manifest, entries))
-            val loaded = NoteRepository(NoteFiles(root)).load(empty.info.id)
+            val loaded = NoteRepository(NoteFiles.open(root)).load(empty.info.id)
             assertEquals(manifest, loaded.manifest)
             assertEquals(listOf(2L, 7L, 8L, 9L), loaded.entries.map { it.id })
             for (i in entries.indices) {
@@ -54,39 +54,39 @@ class NotePersistenceTest {
             }
         } finally { root.deleteRecursively() }
     }
-    @Test fun brokenLatestStrokeRecoversPreviousCompleteManifest() {
+    @Test fun brokenLatestStrokeFailsWithoutOpeningAnOlderEditableRevision() {
         val root = folder()
         try {
-            val repo = NoteRepository(NoteFiles(root)); val empty = repo.create("note")
+            val repo = NoteRepository(NoteFiles.open(root)); val empty = repo.create("note")
             val a = OrderedEdits.Entry(1L, stroke(0xFF202B33.toInt()))
             val first = empty.copy(strokes = listOf(StrokeRef(a.id, a.value.storageId)), nextId = 2)
             repo.save(NoteSnapshot(first, listOf(a)))
             val b = OrderedEdits.Entry(2L, stroke(0xFF205EB8.toInt()))
             repo.save(NoteSnapshot(first.copy(strokes = first.strokes + StrokeRef(b.id, b.value.storageId), nextId = 3), listOf(a, b)))
-            val document = NoteFiles(root).document(empty.info.id)
-            val offset = document.index().records.getValue(b.value.storageId).offset
-            java.io.RandomAccessFile(document.file, "rw").use { it.seek(offset); it.write(0) }
-            val loaded = NoteRepository(NoteFiles(root)).load(empty.info.id)
-            assertTrue(loaded.recovered)
-            assertEquals(first, loaded.manifest)
-            assertEquals(a.value.storageId, loaded.entries.single().value.storageId)
+            val files = NoteFiles.open(root)
+            val store = files.format3.store
+            val current = store.current(empty.info.id)!!
+            val body = store.find(current, setOf(b.id)).getValue(b.id).body.objectId
+            File(store.directory, "objects/$body").writeBytes(byteArrayOf(0))
+            assertThrows(Exception::class.java) { NoteRepository(NoteFiles.open(root)).load(empty.info.id) }
+            assertEquals(current.id, store.current(empty.info.id)!!.id)
         } finally { root.deleteRecursively() }
     }
     @Test fun savingRetainsCausalHistoryAndUndoCanRestoreRemovedStrokes() {
         val root = folder()
         try {
-            val repository = NoteRepository(NoteFiles(root))
+            val repository = NoteRepository(NoteFiles.open(root))
             val empty = repository.create("large note")
             val entries = (1L..3L).map { OrderedEdits.Entry(it, stroke(0xFF202B33.toInt())) }
             fun save(entry: OrderedEdits.Entry<EditorStroke>) {
                 repository.save(NoteSnapshot(empty.copy(strokes = listOf(StrokeRef(entry.id, entry.value.storageId)), nextId = 4), listOf(entry)))
             }
             entries.forEach(::save)
-            val document = NoteFiles(root).document(empty.info.id)
+            val document = NoteFiles.open(root).document(empty.info.id)
             assertTrue(document.index().events.any { it.blob == null })
             assertEquals(listOf(entries[2].value.storageId), document.index().manifest.strokes.map { it.storageId })
             save(entries[0]) // In-memory Undo restores a removed stroke using its original identity.
-            val loaded = NoteRepository(NoteFiles(root)).load(empty.info.id)
+            val loaded = NoteRepository(NoteFiles.open(root)).load(empty.info.id)
             assertEquals(entries[0].value.storageId, loaded.entries.single().value.storageId)
             assertTrue(document.file.exists())
         } finally { root.deleteRecursively() }

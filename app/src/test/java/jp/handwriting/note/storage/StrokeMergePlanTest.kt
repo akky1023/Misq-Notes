@@ -17,11 +17,11 @@ class StrokeMergePlanTest {
         val ref = StrokeRef(id, UUID.randomUUID().toString())
         val bytes = "payload-${++counter}".toByteArray()
         payloads[ref.storageId] = bytes
-        boxes[NotebookArchive.digest(bytes)] = StrokeIndex.Bounds(x, y, x + 10, y + 10)
+        boxes[ContentHash.digest(bytes)] = StrokeIndex.Bounds(x, y, x + 10, y + 10)
         return ref
     }
     private fun base(refs: List<StrokeRef> = emptyList()): MisqFile {
-        val files = NoteFiles(temp.newFolder())
+        val files = MisqTestFiles(temp.newFolder())
         val empty = files.create("note")
         files.save(empty.copy(strokes = refs, nextId = (refs.maxOfOrNull { it.id } ?: 0) + 1)) { payloads.getValue(it) }
         return files.document(empty.info.id)

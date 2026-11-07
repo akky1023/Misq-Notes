@@ -11,43 +11,17 @@ class ImageRecordTest {
     @get:Rule val temp = TemporaryFolder()
     private fun png(): ByteArray = java.util.Base64.getDecoder().decode("iVBORw0KGgoAAAANSUhEUgAAAAwAAAAICAYAAADN5B7xAAAAEUlEQVR4nGNgGBrgPxgNXwAAvNoB/z2zBvkAAAAASUVORK5CYII=")
 
-    @Test fun importedBytesSurviveSourceDeletionRestartAndArchiveRestore() {
-        val root = temp.newFolder()
-        val source = File(root, "original.png").apply { writeBytes(png()) }
-        val expected = source.readBytes()
-        val record = ImageRecord(ImageData(source.readBytes()), 20f, 300f, 900f, 600f)
-        assertTrue(source.delete())
-        val notes = File(root, "notes"); val files = NoteFiles(notes, false)
-        val empty = files.create("Imported photo")
+    @Test fun imageSurvivesFormat3ExportAndImport() {
+        val image = ImageRecord(ImageData(png()), 20f, 300f, 900f, 600f)
+        val files = MisqTestFiles(temp.newFolder()); val empty = files.create("photo")
         val ref = StrokeRef(1, java.util.UUID.randomUUID().toString())
         val manifest = empty.copy(strokes = listOf(ref), nextId = 2)
-        files.save(manifest) { record.encode() }
-        val restored = ImageRecord.decode(NoteFiles(notes, false).stroke(empty.info.id, ref.storageId))
-        assertArrayEquals(expected, restored.data.png)
-        assertEquals(12, restored.data.width); assertEquals(8, restored.data.height)
-
-        val records = mutableMapOf<String, ByteArray>()
-        val directory = object : ArchiveDirectory {
-            override fun names() = records.keys.toSet()
-            override fun read(name: String) = records.getValue(name)
-            override fun write(name: String, bytes: ByteArray) { records[name] = bytes }
-            override fun delete(name: String) { records.remove(name) }
-        }
-        val archive = NotebookArchive(directory)
-        val content = notes.walkTopDown().filter { it.isFile && (it.name.endsWith(".ink") || it.name == "manifest.hwn") }
-            .associateBy { "notes/" + it.relativeTo(notes).invariantSeparatorsPath }
-        val folders = File(root, "folders.hwp"); NotebookFolders.write(folders, LibraryPreferences())
-        archive.commit(content + ("folders.hwp" to folders))
-        val target = temp.newFolder(); archive.restore(checkNotNull(archive.latest()), target)
-        val reopened = NoteFiles(File(target, "notes"))
-        assertEquals(manifest, reopened.read(empty.info.id).manifest)
-        assertArrayEquals(expected, ImageRecord.decode(reopened.stroke(empty.info.id, ref.storageId)).data.png)
-        val asset = records.entries.first { it.key.startsWith("blob-") && runCatching {
-            ByteBuffer.wrap(it.value).getInt(8) == ImageRecord.MAGIC
-        }.getOrDefault(false) }
-        assertEquals("notes/strokes/${asset.key}", ArchiveLayout.path(asset.key, asset.value))
+        files.save(manifest, mapOf(ref.storageId to StrokePlacement(300f, 300f, 900f))) { image.encode() }
+        val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(files.document(empty.info.id)); store.install(root)
+        val exported = File(temp.newFolder(), "${empty.info.id}.misq"); store.export(root, exported)
+        assertEquals(manifest, MisqFile(exported).readManifest().manifest)
+        assertArrayEquals(png(), ImageRecord.decode(MisqFile(exported).stroke(ref.storageId)).data.png)
     }
-
     @Test fun positionsRoundTripAndTranslationDoesNotChangeOwnedImageBytes() {
         val image = ImageRecord(ImageData(png()), 10f, 30f, 600f, 400f)
         val moved = image.translated(12f, 24f)

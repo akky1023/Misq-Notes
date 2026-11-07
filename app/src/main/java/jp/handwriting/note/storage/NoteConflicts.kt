@@ -25,7 +25,7 @@ internal class NoteConflicts(private val notes: File, private val state: File,
         cache[path]?.takeIf { stamp.identity != null && it.stamp == stamp }?.let { return it.version.copy(source = source) }
         val reader = MisqFile(source.file, readOnlyAlias = true)
         val index = reader.index()
-        val history = if (includeHistory) ":" + NotebookArchive.digest((index.events.sortedBy { it.version }.joinToString { it.copy(parents = it.parents.sorted()).toString() } +
+        val history = if (includeHistory) ":" + ContentHash.digest((index.events.sortedBy { it.version }.joinToString { it.copy(parents = it.parents.sorted()).toString() } +
             index.records.toSortedMap().entries.joinToString { it.key + ":" + it.value.hash }).toByteArray(Charsets.UTF_8)) else ""
         val key = reader.contentKey() + history
         return Version(source, index, key).also { cache[path] = Cached(stamp, it) }

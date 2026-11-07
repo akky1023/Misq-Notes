@@ -13,7 +13,7 @@ class MultiMergePlanTest {
     private val payloads = mutableMapOf<String, ByteArray>()
     private fun ref(id: Long) = StrokeRef(id, UUID.randomUUID().toString()).also { payloads[it.storageId] = it.storageId.toByteArray() }
     private fun branches(): List<MisqFile> {
-        val files = NoteFiles(temp.newFolder()); val empty = files.create("note"); val common = ref(1)
+        val files = MisqTestFiles(temp.newFolder()); val empty = files.create("note"); val common = ref(1)
         files.save(empty.copy(strokes = listOf(common), nextId = 10)) { payloads.getValue(it) }
         return List(3) { MisqFile(File(temp.newFolder(), "${empty.info.id}.misq").also { files.document(empty.info.id).file.copyTo(it) }) }
     }

@@ -37,12 +37,13 @@ class Format3IntegrationTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         var tree: Uri? = null
         try {
-            val files = NoteFiles(File(folder, "notes")); val empty = files.create("three regions")
+            val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
+            val files = storage.noteFiles(); val empty = files.create("three regions")
             val entries = listOf(stroke(1, 100f), stroke(2, 10000f), stroke(3, 20000f))
             val manifest = empty.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
             NoteRepository(files).save(NoteSnapshot(manifest, entries))
-            Format3Migration(folder).migrate(listOf(files.document(manifest.info.id)), emptyMap(), placements = { error("already placed") })
-            val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
+            val exchange = File(folder, "exchange-source/${manifest.info.id}.misq").also { it.parentFile!!.mkdirs() }
+            files.format3.export(manifest.info.id, exchange)
             if (external) {
                 @Suppress("DEPRECATION")
                 val selected = provider("test-new-tree")!!.getParcelable<Uri>("tree")!!
@@ -206,7 +207,7 @@ class Format3IntegrationTest {
     }
     @Test fun editorSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
         fixture { folder, storage, manifest, _ ->
-            val before = NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq"))
+            val before = ContentHash.digest(File(folder, "exchange-source/${manifest.info.id}.misq"))
             val models = ViewModelStore(); val model = withContext(Dispatchers.Main) {
                 ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
                     it.viewport.size(1000f, 1000f); it.configureStorage(context, folder, File(folder, "ui-cache")); it.start(folder)
@@ -216,7 +217,7 @@ class Format3IntegrationTest {
             try {
                 waitFor { !model.workspace.value.working }
                 waitFor { !model.workspace.value.working && model.storageLocation.value.format3 }
-                assertEquals(before, NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq")))
+                assertEquals(before, ContentHash.digest(File(folder, "exchange-source/${manifest.info.id}.misq")))
                 withContext(Dispatchers.Main) { model.openNote(manifest.info.id) }
                 waitFor { model.workspace.value.current?.id == manifest.info.id && !model.ui.value.busy && !model.workspace.value.working && !model.ui.value.loadingRest }
                 assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
@@ -249,7 +250,7 @@ class Format3IntegrationTest {
     @Test fun externalImportedNoteRetainsOriginalAndRoundTripsPartialEditsAcrossRestart() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
             assertTrue(storage.usesImmutable); assertTrue(withTimeout(30000) { storage.awaitSync() })
-            val old = File(folder, "notes/${manifest.info.id}.misq"); val expected = NotebookArchive.digest(old)
+            val old = File(folder, "exchange-source/${manifest.info.id}.misq"); val expected = ContentHash.digest(old)
             val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
             val visible = repository.loadVisible(manifest.info.id, 1f); assertTrue(visible.partial); assertEquals(listOf(1L), visible.entries.map { it.id })
             val moved = OrderedEdits.Entry(1L, entries[0].value.translated(0f, 6000f))
@@ -266,7 +267,7 @@ class Format3IntegrationTest {
             val loaded = NoteRepository(restarted.noteFiles()).load(manifest.info.id)
             assertEquals("edited in packs", loaded.manifest.info.title)
             assertEquals(listOf(moved.value.storageId, entries[1].value.storageId, entries[2].value.storageId), loaded.entries.map { it.value.storageId })
-            assertEquals(expected, NotebookArchive.digest(old))
+            assertEquals(expected, ContentHash.digest(old))
             val exported = restarted.noteFiles().document(manifest.info.id)
             exported.validate(); assertEquals(3, exported.index().manifest.strokes.size)
             assertTrue(exported.index().events.size > manifest.strokes.size)
@@ -279,7 +280,7 @@ class Format3IntegrationTest {
             val library = storage.noteFiles().format3!!; val store = library.store
             val base = store.current(Format3Library.SETTINGS_ID)!!
             val other = ImmutableNoteStore(File(folder, "another-device"))
-            Format3Migration(folder).backup(store, other)
+            Format3Storage(folder).backup(store, other)
             val json = org.json.JSONObject(String(store.thumbnail(base)!!, Charsets.UTF_8))
             val original = NotebookFolders.decode(LibraryJson.unwrap(java.util.Base64.getDecoder().decode(json.getString("folders.hwp"))))
             val remoteFolders = original.added("from other device", null)
@@ -326,7 +327,7 @@ class Format3IntegrationTest {
             assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val store = library.store
             val base = store.current(manifest.info.id)!!
-            val other = ImmutableNoteStore(File(folder, "another-device")); Format3Migration(folder).backup(store, other)
+            val other = ImmutableNoteStore(File(folder, "another-device")); Format3Storage(folder).backup(store, other)
             val appended = stroke(4, 300f)
             val foreign = other.edit(other.root(base.id), base.info, 5, emptySet(), listOf(
                 StrokeRef(4, appended.value.storageId) to (appended.value.placement to NoteRepository.encodeStroke(appended.value))))

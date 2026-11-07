@@ -121,10 +121,9 @@ class CombinedConflictSampleDeviceTest {
             check(file.parentFile == stage && digest(file) == item.getString("sha256"))
             check(!confined(File(notes, file.name)).exists())
         }
-        NoteListCache(notes).changing()
         val ids = plan.getJSONArray("sampleIds").let { array -> (0 until array.length()).map { array.getString(it) }.toSet() }
         // Every recursively removed directory is an exact, previously inspected notebook UUID.
-        val files = NoteFiles(notes)
+        val files = MisqTestFiles(notes)
         for (id in ids) { confined(File(notes, id)); files.delete(id) }
         val delete = plan.getJSONArray("deleteFiles")
         for (i in 0 until delete.length()) confined(File(notes, delete.getJSONObject(i).getString("path"))).let { if (it.exists()) check(it.delete()) }
@@ -140,17 +139,17 @@ class CombinedConflictSampleDeviceTest {
             File(stage, name).copyTo(confined(File(notes, name)))
         }
         verify(plan.getJSONArray("preserveFiles"))
-        assertFalse(NoteFiles(notes).list().any { it.id in ids })
+        assertFalse(MisqTestFiles(notes).list().any { it.id in ids })
         val conflicts = NoteConflicts(notes, File(context.filesDir, "conflicts")).scan()
         assertEquals(4, conflicts.count { it.noteId == plan.getString("newId") })
-        assertEquals(1, NoteFiles(notes).list().count { it.id == plan.getString("newId") })
+        assertEquals(1, MisqTestFiles(notes).list().count { it.id == plan.getString("newId") })
         plan.put("phase", "applied"); savePlan(plan)
         stage.deleteRecursively()
     }
 
     private suspend fun generate(stage: File): Pair<String, List<File>> {
         val title = "コンフリクト総合サンプル"
-        val files = NoteFiles(stage); val empty = files.create(title)
+        val files = MisqTestFiles(stage); val empty = files.create(title)
         val payloads = mutableMapOf<String, ByteArray>(); val baseline = linkedMapOf<Long, EditorStroke>()
         var nextId = 1L
         val gray = 0xff616b73.toInt()

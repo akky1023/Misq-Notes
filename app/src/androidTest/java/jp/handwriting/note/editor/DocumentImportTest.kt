@@ -66,11 +66,11 @@ class DocumentImportTest {
             val images = EmbeddedImages.read(context, Uri.fromFile(source))
             val image = EditorStroke(ImageRecord(images.single(), 0f, 0f, 1000f, 666f))
             val notes = File(root, "notes")
-            val repo = NoteRepository(NoteFiles(notes)); val empty = repo.create("Photo")
+            val repo = NoteRepository(NoteFiles.open(notes)); val empty = repo.create("Photo")
             val manifest = empty.copy(strokes = listOf(StrokeRef(1, image.storageId)), nextId = 2)
             repo.save(NoteSnapshot(manifest, listOf(OrderedEdits.Entry(1, image))))
             assertTrue(source.delete())
-            val loaded = NoteRepository(NoteFiles(notes)).load(empty.info.id).entries.single().value
+            val loaded = NoteRepository(NoteFiles.open(notes)).load(empty.info.id).entries.single().value
             assertArrayEquals(images.single().png, checkNotNull(loaded.image).data.png)
             val canvasBitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
             try {
@@ -108,10 +108,10 @@ class DocumentImportTest {
             val entries = images.mapIndexed { index, data ->
                 OrderedEdits.Entry(index + 1L, EditorStroke(ImageRecord(data, 0f, index * 1360f, 1000f, 1333f)))
             }
-            val notes = File(root, "notes"); val repo = NoteRepository(NoteFiles(notes)); val empty = repo.create("PDF")
+            val notes = File(root, "notes"); val repo = NoteRepository(NoteFiles.open(notes)); val empty = repo.create("PDF")
             val manifest = empty.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 3)
             repo.save(NoteSnapshot(manifest, entries))
-            val loaded = NoteRepository(NoteFiles(notes)).load(empty.info.id)
+            val loaded = NoteRepository(NoteFiles.open(notes)).load(empty.info.id)
             loaded.entries.forEachIndexed { index, entry ->
                 val canvasBitmap = Bitmap.createBitmap(100, 100, Bitmap.Config.ARGB_8888)
                 try {

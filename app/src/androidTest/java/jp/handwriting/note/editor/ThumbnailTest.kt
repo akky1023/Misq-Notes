@@ -20,7 +20,7 @@ class ThumbnailTest {
     @Test fun previewIncludesOnlyTheFirstThousandLogicalPixelsAndUpdatesPaper() {
         val root = File(InstrumentationRegistry.getInstrumentation().targetContext.cacheDir, "thumbnail-${UUID.randomUUID()}")
         try {
-            val files = NoteFiles(root); val repo = NoteRepository(files)
+            val files = NoteFiles.open(root); val repo = NoteRepository(files)
             val note = repo.create("preview", NotePaper(0xFFFFFFFF.toInt()))
             fun line(y: Float, color: Int): EditorStroke {
                 val input = MutableStrokeInputBatch().add(InputToolType.STYLUS, 100f, y, 0, pressure = 1f)
@@ -37,12 +37,12 @@ class ThumbnailTest {
             repo.save(NoteSnapshot(manifest.copy(info = manifest.info.copy(paper = NotePaper(0xFF102030.toInt(), PaperPattern.GRID))), entries))
             val updated = BitmapFactory.decodeFile(repo.preview(note.info.id).path)
             assertEquals(0xFF102030.toInt(), updated.getPixel(16, 16)); updated.recycle()
-            assertEquals(PaperPattern.GRID, NoteRepository(NoteFiles(root)).load(note.info.id).manifest.info.paper.pattern)
+            assertEquals(PaperPattern.GRID, NoteRepository(NoteFiles.open(root)).load(note.info.id).manifest.info.paper.pattern)
             // Neither opaque lines nor dots should enter the preview, even after restarting.
             for (pattern in listOf(PaperPattern.GRID, PaperPattern.RULED, PaperPattern.DOTS)) {
                 val paper = NotePaper(0xFF102030.toInt(), pattern, 0xFFFF00FF.toInt(), 32, 8f)
                 repo.save(NoteSnapshot(manifest.copy(info = manifest.info.copy(paper = paper)), entries))
-                val preview = BitmapFactory.decodeFile(NoteRepository(NoteFiles(root)).preview(note.info.id).path)
+                val preview = BitmapFactory.decodeFile(NoteRepository(NoteFiles.open(root)).preview(note.info.id).path)
                 for (y in 0..60) for (x in 0..60) assertEquals("$pattern at $x,$y", paper.color, preview.getPixel(x, y))
                 preview.recycle()
             }

@@ -46,7 +46,7 @@ class Format3OnlyStorageTest {
             val storage = NotebookStorage(context, folder, scope)
             assertFalse(storage.initialize()); assertTrue(storage.usesImmutable)
             val files = storage.noteFiles()
-            val repository = NoteRepository(files, NoteListCache(File(folder, "notes")), persist = { storage.write(it) })
+            val repository = NoteRepository(files, persist = { storage.write(it) })
             val empty = repository.create("new format")
             val stroke = entry()
             val manifest = empty.copy(strokes = listOf(StrokeRef(1L, stroke.value.storageId)), nextId = 2L)
@@ -96,11 +96,11 @@ class Format3OnlyStorageTest {
         isolated { context, folder, scope ->
             val state = File(folder, ".notes-external-state")
             state.writeText("retained legacy state")
-            val hash = NotebookArchive.digest(state)
+            val hash = ContentHash.digest(state)
             val storage = NotebookStorage(context, folder, scope)
             assertThrows(IllegalStateException::class.java) { storage.initialize() }
-            assertFalse(Format3Migration(folder).active)
-            assertEquals(hash, NotebookArchive.digest(state))
+            assertFalse(Format3Storage(folder).active)
+            assertEquals(hash, ContentHash.digest(state))
         }
     }
     @Test fun missingMarkerNeverReplacesAnExistingObjectStore() = runBlocking {
@@ -109,26 +109,26 @@ class Format3OnlyStorageTest {
             val root = store.create(NoteInfo(UUID.randomUUID().toString(), "retained", 1L, 1L)); store.install(root)
             val storage = NotebookStorage(context, folder, scope)
             assertThrows(IllegalStateException::class.java) { storage.initialize() }
-            assertFalse(Format3Migration(folder).active)
+            assertFalse(Format3Storage(folder).active)
             assertEquals(root, store.current(root.info.id))
         }
     }
     @Test fun standaloneLegacyInputIsConvertedWithoutChangingTheOriginal() = runBlocking {
         isolated { context, folder, scope ->
             val storage = NotebookStorage(context, folder, scope); storage.initialize()
-            val sourceFiles = NoteFiles(File(folder, "legacy-input"))
+            val sourceFiles = NoteFiles.open(File(folder, "legacy-input"))
             val empty = sourceFiles.create("import source")
             val stroke = entry()
             val manifest = empty.copy(strokes = listOf(StrokeRef(1L, stroke.value.storageId)), nextId = 2L)
             NoteRepository(sourceFiles).save(NoteSnapshot(manifest, listOf(stroke)))
             val source = sourceFiles.document(manifest.info.id)
-            val expected = NotebookArchive.digest(source.file)
+            val expected = ContentHash.digest(source.file)
             val library = checkNotNull(storage.noteFiles().format3)
             storage.write { library.imported(source.file) }
             val actual = NoteRepository(storage.noteFiles()).load(manifest.info.id)
             assertEquals(manifest, actual.manifest)
             assertEquals(stroke.value.storageId, actual.entries.single().value.storageId)
-            assertEquals(expected, NotebookArchive.digest(source.file))
+            assertEquals(expected, ContentHash.digest(source.file))
             assertTrue(storage.usesImmutable)
             assertFalse(File(folder, "format3-working/notes/${manifest.info.id}.misq").exists())
         }

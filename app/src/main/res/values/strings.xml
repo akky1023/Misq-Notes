@@ -178,13 +178,6 @@
     <string name="delete_curve_point" formatted="false">"選択した通過点を削除"</string>
     <string name="theme_light" formatted="false">"ライト"</string>
     <string name="theme_dark" formatted="false">"ダーク"</string>
-    <string name="storage_name_conflict">"保存用フォルダ「%1$s」と同名のファイルがあります"</string>
-    <string name="storage_create_failed" formatted="false">"保存用フォルダを作成できません"</string>
-    <string name="storage_file_too_large" formatted="false">"保存ファイルが大きすぎます"</string>
-    <string name="storage_file_read_failed" formatted="false">"保存ファイルを読み込めません"</string>
-    <string name="storage_data_invalid" formatted="false">"保存データを確認できません"</string>
-    <string name="storage_write_unverified" formatted="false">"保存先への書き込みを確認できません"</string>
-    <string name="storage_organize_failed" formatted="false">"保存ファイルを整理できません"</string>
     <string name="sort_name_asc" formatted="false">"名前（昇順）"</string>
     <string name="sort_name_desc" formatted="false">"名前（降順）"</string>
     <string name="sort_created_asc" formatted="false">"作成日（昇順）"</string>
@@ -196,13 +189,9 @@
     <string name="sort_created" formatted="false">"作成日"</string>
     <string name="sort_updated" formatted="false">"更新日"</string>
     <string name="folder_not_empty" formatted="false">"空のフォルダのみ削除できます"</string>
-    <string name="storage_read_retained" formatted="false">"保存先のデータを読み込めません。アプリ内のデータを保持しています。"</string>
-    <string name="storage_corrupt" formatted="false">"保存先のデータが破損しています"</string>
-    <string name="storage_commit_failed" formatted="false">"保存先の確定に失敗しました"</string>
     <string name="storage_selected" formatted="false">"指定したフォルダ"</string>
     <string name="unreadable_note" formatted="false">"読み込めないノート"</string>
     <string name="note_data_read_failed" formatted="false">"保存データを読み込めません"</string>
-    <string name="note_format_invalid" formatted="false">"ノートの形式が正しくありません"</string>
     <string name="save_unsuccessful" formatted="false">"保存できませんでした"</string>
     <string name="storage_select_failed">"保存先を指定できません：%1$s"</string>
     <string name="storage_location" formatted="false">"ノートの保存先"</string>

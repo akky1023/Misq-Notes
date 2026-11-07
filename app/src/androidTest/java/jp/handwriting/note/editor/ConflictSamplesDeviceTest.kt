@@ -45,7 +45,7 @@ class ConflictSamplesDeviceTest {
         assertEquals("net.neomenia.misqnotes.probe", context.packageName)
         val stage = File(context.cacheDir, "conflict-fixture-samples-${UUID.randomUUID()}").apply { mkdirs() }
         val publish = File(stage, "publish").apply { mkdirs() }
-        val files = NoteFiles(publish)
+        val files = MisqTestFiles(publish)
         val payloads = mutableMapOf<String, ByteArray>()
         val published = mutableListOf<File>()
         val readme = StringBuilder("コンフリクトの比較用サンプル\n\n灰色：共通の筆跡、青：左側の変更、赤：右側の変更。\n自動解消されるケースは一覧ボタンが出ない。名前の番号で探せます。\n比較画面の自動マージの強さを切り替えて挙動を比べられます。\n13だけ別版が2件、それ以外は1件です。\n\n")
@@ -147,7 +147,6 @@ class ConflictSamplesDeviceTest {
                 for (file in published) { zip.putNextEntry(ZipEntry("notes/${file.name}")); file.inputStream().use { it.copyTo(zip, 65536) }; zip.closeEntry() }
             }
             val notes = File(context.filesDir, "notes").apply { mkdirs() }
-            NoteListCache(notes).changing()
             for (file in published) {
                 val target = File(notes, file.name)
                 check(!target.exists())

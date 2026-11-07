@@ -14,7 +14,7 @@ class StarSamplesDeviceTest {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue(args.getString("starSamples") == "true")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val repository = NoteRepository(NoteFiles(File(context.filesDir, "notes")))
+        val repository = NoteRepository(NoteFiles.open(File(context.filesDir, "notes")))
         val note = repository.list().single { it.title == "stars" }
         val loaded = repository.load(note.id)
         assertEquals(20, loaded.entries.size)

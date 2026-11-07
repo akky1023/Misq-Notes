@@ -64,8 +64,8 @@ class MisqFileTest {
         assertArrayEquals(byteArrayOf(2), target.stroke(moved.storageId))
     }
     private fun ref(id: Long) = StrokeRef(id, UUID.randomUUID().toString())
-    private fun note(): Pair<NoteFiles, NoteManifest> {
-        val files = NoteFiles(temp.newFolder())
+    private fun note(): Pair<MisqTestFiles, NoteManifest> {
+        val files = MisqTestFiles(temp.newFolder())
         return files to files.create("ノート", 1234)
     }
     private fun copy(source: MisqFile): MisqFile = MisqFile(File(temp.newFolder(), source.file.name).also { source.file.copyTo(it) })
@@ -77,7 +77,7 @@ class MisqFileTest {
         val two = one.copy(strokes = listOf(a, b), nextId = 3)
         files.save(two) { id -> assertEquals(b.storageId, id); byteArrayOf(7) }
         assertTrue(packed.file.length() - before < 20000)
-        val reopened = NoteFiles(packed.file.parentFile!!)
+        val reopened = MisqTestFiles(packed.file.parentFile!!)
         assertEquals(two, reopened.read(empty.info.id).manifest)
         assertArrayEquals(ByteArray(100000) { 42 }, reopened.stroke(empty.info.id, a.storageId))
         assertArrayEquals(byteArrayOf(7), reopened.stroke(empty.info.id, b.storageId))
@@ -113,17 +113,7 @@ class MisqFileTest {
         assertEquals("ノート", files.list().single().title)
         assertThrows(IOException::class.java) { packed.stroke(a.storageId) }
     }
-    @Test fun legacyMigrationKeepsOriginalAndEmbedsAllBytes() {
-        val root = temp.newFolder(); val legacy = NoteFiles(root, false); val empty = legacy.create("old")
-        val a = ref(1); val manifest = empty.copy(strokes = listOf(a), nextId = 2)
-        legacy.save(manifest) { byteArrayOf(1, 2, 3) }
-        val files = NoteFiles(root)
-        files.save(manifest) { error("migration must read legacy data") }
-        assertTrue(File(root, "${empty.info.id}/manifest.hwn").exists())
-        assertEquals(manifest, files.read(empty.info.id).manifest)
-        File(root, empty.info.id).deleteRecursively()
-        assertArrayEquals(byteArrayOf(1, 2, 3), files.stroke(empty.info.id, a.storageId))
-    }
+
     @Test fun simultaneousAdditionsWithSameNumericOrderBothSurviveMergeAndReload() {
         val (files, empty) = note(); val base = files.document(empty.info.id)
         val a = copy(base); val b = copy(base); val left = ref(1); val right = ref(1)
@@ -158,19 +148,6 @@ class MisqFileTest {
         val left = a.file.readBytes(); val right = b.file.readBytes()
         assertThrows(ArchiveConflictException::class.java) { MisqFile.merge(base, a, b) }
         assertArrayEquals(left, a.file.readBytes()); assertArrayEquals(right, b.file.readBytes())
-    }
-    @Test fun folderMembershipAndNoteContentMergeIndependently() {
-        val (files, empty) = note(); val base = files.document(empty.info.id)
-        val a = copy(base); val b = copy(base); val stroke = ref(1)
-        a.save(empty.copy(strokes = listOf(stroke), nextId = 2)) { byteArrayOf(1) }
-        val original = LibraryPreferences().added("folder", null)
-        val moved = original.moved(empty.info.id, original.folders.single().id)
-        val path = "notes/${empty.info.id}.misq"
-        fun snapshot(note: MisqFile, library: LibraryPreferences) = mapOf(path to note.file.readBytes(), "folders.hwp" to LibraryJson.envelope(NotebookFolders.encode(library)))
-        val merged = MisqMerge.merge(snapshot(base, original), snapshot(a, original), snapshot(b, moved), temp.newFolder())
-        val folders = NotebookFolders.decode(LibraryJson.unwrap(merged.getValue("folders.hwp").bytes))
-        assertEquals(moved.locations, folders.locations)
-        assertArrayEquals(a.file.readBytes(), merged.getValue(path).bytes)
     }
     @Test fun addingAfterMergePreservesDrawingOrderEvenWhenOriginalIdsHadGaps() {
         val (files, empty) = note(); val original = ref(100)
@@ -218,26 +195,12 @@ class MisqFileTest {
         assertArrayEquals(byteArrayOf(1), packed.stroke(a.storageId))
         assertArrayEquals(byteArrayOf(2), packed.stroke(b.storageId))
     }
-    @Test fun initialMisqFormatUpgradesWithoutLosingNoteMetadata() {
-        val root = temp.newFolder(); val codec = NoteFiles(root, false)
-        val empty = codec.create("version one", 1234)
-        val file = File(root, "${empty.info.id}.misq")
-        val json = org.json.JSONObject().put("format", 1).put("generation", 1).put("id", empty.info.id)
-            .put("manifest", java.util.Base64.getEncoder().encodeToString(codec.encodeManifest(empty)))
-            .put("records", org.json.JSONObject()).put("entities", org.json.JSONObject())
-            .put("events", org.json.JSONArray()).put("thumbnail", org.json.JSONObject.NULL).put("thumbnailKey", org.json.JSONObject.NULL)
-        val bytes = json.toString().toByteArray()
-        RandomAccessFile(file, "rw").use { output ->
-            output.setLength(136); output.writeLong(0x4D49535130303031L)
-            output.seek(136); output.write(bytes)
-            output.seek(72); output.writeLong(1); output.writeLong(136); output.writeInt(bytes.size)
-            output.write(java.security.MessageDigest.getInstance("SHA-256").digest(bytes))
-        }
-        val files = NoteFiles(root); assertEquals(empty, files.read(empty.info.id).manifest)
-        files.rename(empty.info.id, "upgraded")
-        assertEquals("upgraded", files.read(empty.info.id).manifest.info.title)
-        assertEquals(empty, files.document(empty.info.id).previous())
-        RandomAccessFile(file, "r").use { assertEquals(0x4D49535130303032L, it.readLong()) }
+    @Test fun obsoleteMisqHeaderIsRejectedWithoutChangingTheFile() {
+        val file = File(temp.newFolder(), "old.misq")
+        RandomAccessFile(file, "rw").use { it.setLength(136); it.writeLong(0x4D49535130303031L) }
+        val before = file.readBytes()
+        assertThrows(Exception::class.java) { MisqFile(file).readManifest() }
+        assertArrayEquals(before, file.readBytes())
     }
     @Test fun appendOnlySavesBoundIndexGrowthWithoutAnOrphanSweep() {
         val (files, empty) = note()
@@ -295,9 +258,9 @@ class MisqFileTest {
             it.seek(packed.index().records.getValue(a.storageId).offset); it.write(2)
         }
         packed.file.appendBytes(ByteArray(9 * 1024 * 1024))
-        val before = NotebookArchive.digest(packed.file)
+        val before = ContentHash.digest(packed.file)
         assertThrows(IllegalArgumentException::class.java) { packed.compactIfNeeded() }
-        assertEquals(before, NotebookArchive.digest(packed.file))
+        assertEquals(before, ContentHash.digest(packed.file))
         assertFalse(File(packed.file.path + ".compact").exists())
         val saved = empty.copy(info = empty.info.copy(title = "saved"), nextId = 2)
         packed.save(saved) { error("deleted") }

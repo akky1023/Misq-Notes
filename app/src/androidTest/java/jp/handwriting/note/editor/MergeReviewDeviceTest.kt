@@ -38,7 +38,7 @@ class MergeReviewDeviceTest {
     private data class Fixture(val root: File, val a: File, val b: File, val original: NoteManifest, val conflict: NoteConflict)
     private fun fixture(deleteAgainstMove: Boolean = false, independentHistory: Boolean = false, multiple: Boolean = false, fourth: Boolean = false, more: Boolean = false, metadata: Boolean = false, metadataOnly: Boolean = false, distant: Boolean = false): Fixture {
         val root = File(instrumentation.targetContext.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
-        val files = NoteFiles(File(root, "notes")); val empty = files.create("merge fixture")
+        val files = MisqTestFiles(File(root, "notes")); val empty = files.create("merge fixture")
         val common = ink(100f, 100f, 0xff202124.toInt())
         val payloads = mutableMapOf(common.storageId to NoteRepository.encodeStroke(common))
         val base = empty.copy(strokes = listOf(StrokeRef(1, common.storageId)), nextId = 2)
@@ -150,12 +150,12 @@ class MergeReviewDeviceTest {
     private fun paperSelected(source: Int): Boolean = find(AppMessages.text(R.string.merge_canvas, source.toString()))
         ?.let { it.isSelected || it.isChecked } == true
     private fun scenario(fixture: Fixture) = ActivityScenario.launch<ConflictFixtureActivity>(
-        Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", fixture.root.path))
+        Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(fixture.root).path))
     @Test fun identicalInkWithIndependentHistoryNeedsNoDecisionAndIsSavedOnce() = kotlinx.coroutines.runBlocking {
         val fixture = fixture(independentHistory = true)
         val cache = File(fixture.root, "merge-reviews")
         val createdAt = fixture.original.info.createdAt
-        val bHash = NotebookArchive.digest(fixture.b.readBytes())
+        val bHash = ContentHash.digest(fixture.b.readBytes())
         MergeReviewSession.prepare(fixture.conflict, fixture.a to fixture.b, cache).use { session ->
             assertEquals(1, session.plan.unchanged.size)
             assertEquals(2, session.plan.changes.size)
@@ -166,8 +166,8 @@ class MergeReviewDeviceTest {
         assertEquals(fixture.original.info.id, MisqFile(fixture.a).readManifest().manifest.info.id)
         assertEquals(createdAt, MisqFile(fixture.a).readManifest().manifest.info.createdAt)
         assertEquals(fixture.original, MisqFile(fixture.a).previous())
-        assertEquals(1, NoteFiles(File(fixture.root, "notes")).list().size)
-        assertEquals(bHash, NotebookArchive.digest(fixture.b.readBytes()))
+        assertEquals(1, MisqTestFiles(File(fixture.root, "notes")).list().size)
+        assertEquals(bHash, ContentHash.digest(fixture.b.readBytes()))
     }
     @Test fun overwriteRecordsRejectedHeadsSoSyncCannotRestoreDeletedInk() = kotlinx.coroutines.runBlocking {
         val fixture = fixture(deleteAgainstMove = true)
@@ -199,12 +199,12 @@ class MergeReviewDeviceTest {
             val current = MisqFile(fixture.a)
             val edited = fixture.original.copy(info = fixture.original.info.copy(title = "edited during review"))
             current.save(edited) { error("No new payload") }
-            val before = NotebookArchive.digest(fixture.a.readBytes())
+            val before = ContentHash.digest(fixture.a.readBytes())
             try {
                 session.save(File(fixture.root, "notes"), MergeStrength.CAUTIOUS, emptyMap(), true, "merged")
                 fail("A stale review must not overwrite the original")
             } catch (_: IllegalStateException) { }
-            assertEquals(before, NotebookArchive.digest(fixture.a.readBytes()))
+            assertEquals(before, ContentHash.digest(fixture.a.readBytes()))
             assertEquals(edited, MisqFile(fixture.a).readManifest().manifest)
         }
     }
@@ -213,7 +213,7 @@ class MergeReviewDeviceTest {
         val preferences = instrumentation.targetContext.getSharedPreferences("merge-review", 0)
         val previous = preferences.getString("strength", null)
         preferences.edit().putString("strength", MergeStrength.CAUTIOUS.name).commit()
-        val bHash = NotebookArchive.digest(fixture.b.readBytes())
+        val bHash = ContentHash.digest(fixture.b.readBytes())
         lateinit var model: EditorViewModel
         try { scenario(fixture).use { scenario ->
             scenario.onActivity { model = it.model }
@@ -262,8 +262,8 @@ class MergeReviewDeviceTest {
             assertEquals(fixture.original.info.id, model.workspace.value.current!!.id)
             assertEquals(3, model.edits.entries.size)
             assertEquals(fixture.original, MisqFile(fixture.a).previous())
-            assertEquals(1, NoteFiles(File(fixture.root, "notes")).list().size)
-            assertEquals(bHash, NotebookArchive.digest(fixture.b.readBytes()))
+            assertEquals(1, MisqTestFiles(File(fixture.root, "notes")).list().size)
+            assertEquals(bHash, ContentHash.digest(fixture.b.readBytes()))
             assertTrue(model.conflicts.value.items.isEmpty())
         } } finally { preferences.edit().apply { if (previous == null) remove("strength") else putString("strength", previous) }.commit() }
     }
@@ -458,7 +458,7 @@ class MergeReviewDeviceTest {
     @Test fun finalPreviewAddsEditorSidebarWithoutSavingAndFrameDragOnlyNavigatesReview() {
         val fixture = fixture(distant = true)
         val originalEvents = MisqFile(fixture.a).index().events
-        val aliasHash = NotebookArchive.digest(fixture.b.readBytes())
+        val aliasHash = ContentHash.digest(fixture.b.readBytes())
         lateinit var model: EditorViewModel
         scenario(fixture).use { scenario ->
             scenario.onActivity { model = it.model }
@@ -500,7 +500,7 @@ class MergeReviewDeviceTest {
             assertEquals(editorPosition, model.viewport.position)
             assertEquals(fixture.original, MisqFile(fixture.a).readManifest().manifest)
             assertEquals(originalEvents, MisqFile(fixture.a).index().events)
-            assertEquals(aliasHash, NotebookArchive.digest(fixture.b.readBytes()))
+            assertEquals(aliasHash, ContentHash.digest(fixture.b.readBytes()))
             click(AppMessages.text(R.string.preview_star_filter))
             waitFor { find(AppMessages.text(R.string.preview_no_stars)) != null }
             click(AppMessages.text(R.string.preview_star_filter))
@@ -587,7 +587,7 @@ class MergeReviewDeviceTest {
             assertEquals(fixture.original, MisqFile(fixture.a).previous())
         }
         val cancelFixture = fixture()
-        val originalHash = NotebookArchive.digest(cancelFixture.b.readBytes())
+        val originalHash = ContentHash.digest(cancelFixture.b.readBytes())
         scenario(cancelFixture).use { scenario ->
             scenario.onActivity { model = it.model }
             waitFor { !model.workspace.value.working && model.conflicts.value.items.isNotEmpty() }
@@ -595,8 +595,8 @@ class MergeReviewDeviceTest {
             waitFor { model.mergeReview.value.session != null }
             scenario.onActivity { model.dismissMerge() }
             waitFor { File(cancelFixture.root, "merge-reviews").listFiles().orEmpty().isEmpty() }
-            assertEquals(1, NoteFiles(File(cancelFixture.root, "notes")).list().size)
-            assertEquals(originalHash, NotebookArchive.digest(cancelFixture.b.readBytes()))
+            assertEquals(1, MisqTestFiles(File(cancelFixture.root, "notes")).list().size)
+            assertEquals(originalHash, ContentHash.digest(cancelFixture.b.readBytes()))
         }
     }
 }

@@ -6,8 +6,8 @@ import android.provider.DocumentsContract
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
-/** Only enumerates packed-v1; the old per-stroke directories remain untouched for rollback. */
-internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String = "packed-v1") : PackedFiles {
+/** SAF object transport confined to the explicitly selected subdirectory. */
+internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String) : PackedFiles {
     private val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
     private var folder: Uri? = null
     @Volatile private var known = java.util.concurrent.ConcurrentHashMap<String, Uri>()
@@ -42,7 +42,7 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         output.toByteArray()
     }
     override fun write(name: String, bytes: ByteArray) {
-        if (known.containsKey(name)) { check(digest(name) == NotebookArchive.digest(bytes)); return }
+        if (known.containsKey(name)) { check(digest(name) == ContentHash.digest(bytes)); return }
         bytes.inputStream().use { writeStream(name, it) }
     }
     override fun writeStream(name: String, input: InputStream) {

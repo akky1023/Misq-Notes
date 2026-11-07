@@ -9,34 +9,14 @@ import org.junit.rules.TemporaryFolder
 
 class NoteConflictsTest {
     @get:Rule val temp = TemporaryFolder()
-    @Test fun userDeletionRemovesAllVersionsWithOrWithoutAnOriginalAndPreservesOtherNotes() {
-        for (missingOriginal in listOf(false, true)) {
-            val (files, note, store) = setup()
-            val a = alias(files, note, "renamed.misq")
-            val b = alias(files, note, "${UUID.randomUUID()}.misq", 8)
-            val unrelated = files.create("keep")
-            val unrelatedFile = files.document(unrelated.info.id).file
-            val before = unrelatedFile.readBytes()
-            if (missingOriginal) files.delete(note.info.id)
-            val repository = NoteRepository(files)
-            assertTrue(repository.list().any { it.id == note.info.id })
-            repository.delete(note.info.id)
-            assertFalse(a.exists())
-            assertFalse(b.exists())
-            assertFalse(repository.list().any { it.id == note.info.id })
-            assertTrue(store.scan().isEmpty())
-            assertEquals(listOf(unrelated.info.id), NoteRepository(NoteFiles(unrelatedFile.parentFile!!)).list().map { it.id })
-            assertArrayEquals(before, unrelatedFile.readBytes())
-        }
-    }
-    private fun setup(): Triple<NoteFiles, NoteManifest, NoteConflicts> {
+    private fun setup(): Triple<MisqTestFiles, NoteManifest, NoteConflicts> {
         val root = temp.newFolder()
-        val files = NoteFiles(root)
+        val files = MisqTestFiles(root)
         val note = files.create("original", 123)
         return Triple(files, note, NoteConflicts(root, temp.newFolder()))
     }
-    private fun alias(files: NoteFiles, manifest: NoteManifest, name: String, payload: Byte = 7): File {
-        val stage = NoteFiles(temp.newFolder())
+    private fun alias(files: MisqTestFiles, manifest: NoteManifest, name: String, payload: Byte = 7): File {
+        val stage = MisqTestFiles(temp.newFolder())
         val ref = StrokeRef(1, UUID.randomUUID().toString())
         stage.save(manifest.copy(strokes = listOf(ref), nextId = 2)) { byteArrayOf(payload) }
         return File(files.document(manifest.info.id).file.parentFile, name).also { stage.document(manifest.info.id).file.copyTo(it) }
@@ -56,7 +36,7 @@ class NoteConflictsTest {
         val (files, note, store) = setup()
         val duplicate = File(files.document(note.info.id).file.parentFile, "copy.misq")
         files.document(note.info.id).file.copyTo(duplicate)
-        val staged = NoteFiles(temp.newFolder())
+        val staged = MisqTestFiles(temp.newFolder())
         staged.save(note.copy(info = note.info.copy(updatedAt = 999, position = jp.handwriting.note.editor.ViewPosition(2f, 100f, 200f)))) { error("empty") }
         staged.document(note.info.id).file.copyTo(duplicate, overwrite = true)
         files.create("unrelated", 456)
@@ -67,16 +47,16 @@ class NoteConflictsTest {
         val alias = alias(files, note, "arbitrary.misq")
         val originalRef = StrokeRef(5, UUID.randomUUID().toString())
         files.save(note.copy(strokes = listOf(originalRef), nextId = 6)) { byteArrayOf(1) }
-        val originalHash = NotebookArchive.digest(files.document(note.info.id).file.readBytes())
-        val aliasHash = NotebookArchive.digest(alias.readBytes())
+        val originalHash = ContentHash.digest(files.document(note.info.id).file.readBytes())
+        val aliasHash = ContentHash.digest(alias.readBytes())
         val conflict = store.scan().single()
         val result = store.copy(conflict, "other version")
         assertNotEquals(note.info.id, result.info.id)
         assertEquals("other version", result.info.title)
         assertArrayEquals(byteArrayOf(7), files.stroke(result.info.id, result.strokes.single().storageId))
-        assertEquals(originalHash, NotebookArchive.digest(files.document(note.info.id).file.readBytes()))
+        assertEquals(originalHash, ContentHash.digest(files.document(note.info.id).file.readBytes()))
         assertArrayEquals(byteArrayOf(1), files.stroke(note.info.id, originalRef.storageId))
-        assertEquals(aliasHash, NotebookArchive.digest(alias.readBytes()))
+        assertEquals(aliasHash, ContentHash.digest(alias.readBytes()))
         store.markOpened(conflict, result.info.id)
         assertTrue(store.scan().isEmpty())
         assertTrue(NoteConflicts(alias.parentFile!!, File(temp.root, "unknown-state")).scan().isNotEmpty())
@@ -104,37 +84,6 @@ class NoteConflictsTest {
         assertFalse(store.canAutoMerge(conflict))
         assertNull(store.autoMerge(conflict))
         assertFalse(files.document(note.info.id).file.exists())
-        assertTrue(files.provisionalVersions().getValue(note.info.id).second.provisional)
-    }
-    @Test fun newestManifestTimestampWinsProvisionalDisplay() {
-        val (files, note, store) = setup()
-        val older = alias(files, note.copy(info = note.info.copy(updatedAt = 200)), "a.misq")
-        val newer = alias(files, note.copy(info = note.info.copy(updatedAt = 300)), "b.misq", 8)
-        older.setLastModified(System.currentTimeMillis() + 100000)
-        files.delete(note.info.id)
-        assertEquals(newer, files.provisionalVersions().getValue(note.info.id).first)
-        newer.copyTo(File(newer.parentFile, "c.misq"))
-        assertEquals(newer, files.provisionalVersions().getValue(note.info.id).first)
-        assertEquals(2, store.scan().size)
-        assertTrue(store.scan().all { it.provisional })
-    }
-    @Test fun timestampTiesUseContentHashAcrossRenamesAndMatchMergeBase() {
-        val (files, note, store) = setup()
-        val a = alias(files, note, "a.misq", 7)
-        val b = alias(files, note, "b.misq", 8)
-        a.setLastModified(123000); b.setLastModified(123000)
-        files.delete(note.info.id)
-        val expected = listOf(a, b).minOf { MisqFile(it, readOnlyAlias = true).contentKey() }
-        fun verify() {
-            val selected = files.provisionalVersions().getValue(note.info.id).first
-            assertEquals(expected, MisqFile(selected, readOnlyAlias = true).contentKey())
-            assertEquals(expected, store.scan().minWith(conflictVersionOrder).key)
-            assertEquals(selected, store.mergeSources(store.scan().first()).first)
-        }
-        verify()
-        val swap = File(a.parentFile, "swap.tmp")
-        assertTrue(a.renameTo(swap)); assertTrue(b.renameTo(a)); assertTrue(swap.renameTo(b))
-        verify()
     }
     @Test fun identicalNamesAndTimestampsInDifferentLocationsIgnoreDiscoveryOrder() {
         val (files, note, store) = setup()

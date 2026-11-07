@@ -82,7 +82,7 @@ internal class Format3Library(val store: ImmutableNoteStore, private val notes: 
         val digest = java.security.MessageDigest.getInstance("SHA-256"); digest.update(NoteManifestCodec.encodeManifest(note))
         val rows = store.find(root, refs.map { it.id }.toSet())
         refs.forEach { digest.update(rows.getValue(it.id).body.hash.toByteArray(Charsets.US_ASCII)) }
-        return "$id:${NotebookArchive.hex(digest.digest())}"
+        return "$id:${ContentHash.hex(digest.digest())}"
     }
     fun requireCurrentExport(id: String) {
         val exported = MisqFile(File(notes, "$id.misq"))
@@ -99,9 +99,9 @@ internal class Format3Library(val store: ImmutableNoteStore, private val notes: 
         val root = checkNotNull(store.current(id))
         if (store.recovered(id)) return // A disposable preview cannot acknowledge recovery of an older head.
         if (expectedRevision != null && root.id != expectedRevision) return
-        if (root.thumbnail == "o-${NotebookArchive.digest(bytes)}" && root.thumbnailKey == store.previewKey(root)) return
+        if (root.thumbnail == "o-${ContentHash.digest(bytes)}" && root.thumbnailKey == store.previewKey(root)) return
         store.install(store.saveThumbnail(root, bytes), validate = false)
     }
-    fun source(id: String): SpatialNoteCache.Source? = store.current(id)?.takeIf { !it.deleted }?.let { SpatialNoteCache.Source(store, it, store.recovered(id)) }
+    fun source(id: String): SpatialNoteSource? = store.current(id)?.takeIf { !it.deleted }?.let { SpatialNoteSource(store, it, store.recovered(id)) }
     companion object { const val SETTINGS_ID = "00000000-0000-0000-0000-000000000003" }
 }

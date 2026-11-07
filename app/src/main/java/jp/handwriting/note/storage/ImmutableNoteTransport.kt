@@ -93,7 +93,7 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
         val names = inventory.filter { it.matches(COMMIT) && it.substring(7, 43) == noteId }
         // Torn advertisements were never committed. Valid advertisements with missing
         // dependencies cause an error, preserving the previously installed healthy state.
-        val complete = names.filter { name -> runCatching { NotebookArchive.digest(remote.read(name)) == name.substring(44, 108) }.getOrDefault(false) }
+        val complete = names.filter { name -> runCatching { ContentHash.digest(remote.read(name)) == name.substring(44, 108) }.getOrDefault(false) }
         val records = complete.groupBy { it.substring(44, 108) }.mapValues { it.value.first() }
         val roots = records.map { (hash, name) ->
             val id = "o-$hash"; remote.openRead(name).use { store.importObject(id, it) }; store.root(id)

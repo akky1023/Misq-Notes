@@ -178,13 +178,6 @@
     <string name="delete_curve_point" formatted="false">"Delete selected curve point"</string>
     <string name="theme_light" formatted="false">"Light"</string>
     <string name="theme_dark" formatted="false">"Dark"</string>
-    <string name="storage_name_conflict">"A file named “%1$s” is blocking the storage folder"</string>
-    <string name="storage_create_failed" formatted="false">"Could not create the storage folder"</string>
-    <string name="storage_file_too_large" formatted="false">"The saved file is too large"</string>
-    <string name="storage_file_read_failed" formatted="false">"Could not read the saved file"</string>
-    <string name="storage_data_invalid" formatted="false">"Could not verify the saved data"</string>
-    <string name="storage_write_unverified" formatted="false">"Could not verify the write to the storage folder"</string>
-    <string name="storage_organize_failed" formatted="false">"Could not organize the saved files"</string>
     <string name="sort_name_asc" formatted="false">"Name (ascending)"</string>
     <string name="sort_name_desc" formatted="false">"Name (descending)"</string>
     <string name="sort_created_asc" formatted="false">"Created (ascending)"</string>
@@ -196,13 +189,9 @@
     <string name="sort_created" formatted="false">"Created"</string>
     <string name="sort_updated" formatted="false">"Updated"</string>
     <string name="folder_not_empty" formatted="false">"Only empty folders can be deleted"</string>
-    <string name="storage_read_retained" formatted="false">"Could not read the storage folder. The copy in the app has been kept."</string>
-    <string name="storage_corrupt" formatted="false">"The data in the storage folder is damaged"</string>
-    <string name="storage_commit_failed" formatted="false">"Could not finish saving to the storage folder"</string>
     <string name="storage_selected" formatted="false">"Selected folder"</string>
     <string name="unreadable_note" formatted="false">"Unreadable note"</string>
     <string name="note_data_read_failed" formatted="false">"Could not read the saved data"</string>
-    <string name="note_format_invalid" formatted="false">"The note format is invalid"</string>
     <string name="save_unsuccessful" formatted="false">"Could not save"</string>
     <string name="storage_select_failed">"Could not select the storage folder: %1$s"</string>
     <string name="storage_location" formatted="false">"Note storage location"</string>

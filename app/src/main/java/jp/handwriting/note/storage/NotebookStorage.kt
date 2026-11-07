@@ -12,7 +12,7 @@ import org.json.JSONObject
 
 internal data class SettingsVersion(val id: String, val local: Boolean, val folders: Int, val locations: Int)
 
-/** Daily persistence uses Format 3 only. Legacy MISQ files remain an import/export boundary. */
+/** Daily persistence uses Format 3 only. Standalone MISQ0002 files are used only for exchange and conflict review. */
 internal class NotebookStorage(private val context: Context, private val directory: File, private val scope: CoroutineScope) {
     private var format3: Format3Library? = null
     private var format3Uri: Uri? = null
@@ -45,9 +45,9 @@ internal class NotebookStorage(private val context: Context, private val directo
         private set
 
     fun initialize(): Boolean {
-        val migration = Format3Migration(directory)
+        val storage = Format3Storage(directory)
         val preferences = context.getSharedPreferences("note-storage", Context.MODE_PRIVATE)
-        if (!migration.active) {
+        if (!storage.active) {
             // A missing marker must never turn an existing library into an empty one.
             val legacy = preferences.getString("tree", null) != null ||
                 listOf(".notes-external-state", ".notes-sync-base", ".notes-pending", ".notes-external-switch").any { File(directory, it).exists() } ||
@@ -55,11 +55,10 @@ internal class NotebookStorage(private val context: Context, private val directo
                     (it.isFile && it.extension == "misq") || (it.isDirectory && File(it, "manifest.hwn").isFile)
                 } || directory.listFiles().orEmpty().any { it.isDirectory && it.name.matches(Regex("format3-[a-f0-9-]{36}")) }
             check(!legacy) { AppMessages.text(R.string.storage_legacy_unsupported) }
-            val metadata = listOf("library.hwp", "palette.hwp", "tools.hwp").associateWith { File(directory, it) }
-            migration.migrate(emptyList(), metadata, placements = { error("New library has no legacy inputs") })
+            storage.create()
         }
         format3Uri = preferences.getString("format3-tree", null)?.let(Uri::parse)
-        val store = migration.open()
+        val store = storage.open()
         format3 = Format3Library(store, File(directory, "format3-working/notes").also { check(it.isDirectory || it.mkdirs()) })
         externalMode.value = uri != null
         return uri != null
@@ -78,7 +77,7 @@ internal class NotebookStorage(private val context: Context, private val directo
     }
     fun noteFiles(): NoteFiles {
         val library = checkNotNull(format3) { AppMessages.text(R.string.storage_legacy_unsupported) }
-        return NoteFiles(File(directory, "format3-working/notes")).also { it.format3 = library }
+        return NoteFiles(File(directory, "format3-working/notes"), library)
     }
     @Synchronized fun contains(id: String) = format3?.contains(id) == true
     @Synchronized fun ensure(id: String) {

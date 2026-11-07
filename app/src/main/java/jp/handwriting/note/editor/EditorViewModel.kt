@@ -170,7 +170,6 @@ class EditorViewModel : ViewModel() {
     private val mutableConflicts = MutableStateFlow(ConflictsUi())
     internal val conflicts = mutableConflicts.asStateFlow()
     private var conflictStore: NoteConflicts? = null
-    private var conflictDocuments: ConflictDocuments? = null
     private var conflictScan: kotlinx.coroutines.Job? = null
     private val mutableMergeReview = MutableStateFlow(MergeReviewUi())
     internal val mergeReview = mutableMergeReview.asStateFlow()
@@ -180,7 +179,6 @@ class EditorViewModel : ViewModel() {
     internal fun configureStorage(context: android.content.Context, directory: File = context.filesDir, cache: File = context.cacheDir) {
         initialAspect = context.resources.displayMetrics.let { it.heightPixels.toFloat() / it.widthPixels.coerceAtLeast(1) }
         mergeCache = File(cache, "merge-reviews")
-        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(cache, "conflict-sources"))
         if (notebookStorage == null) {
             notebookStorage = NotebookStorage(context.applicationContext, directory, viewModelScope)
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
@@ -243,8 +241,7 @@ class EditorViewModel : ViewModel() {
                 positionSaves = SaveQueue(viewModelScope, batchMillis = 500) { (id, position) ->
                     withContext(Dispatchers.IO) { viewPositions!!.write(id, position) }
                 }
-                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
-                    if (notebookStorage?.usesImmutable == true) null else NoteListCache(File(directory, "notes"))) { action ->
+                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles.open(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
                 val noteDirectory = notebookStorage?.noteFiles()?.directory ?: File(directory, "notes")
@@ -329,10 +326,9 @@ class EditorViewModel : ViewModel() {
         conflictScan = viewModelScope.launch {
             try {
                 val items = withContext(Dispatchers.IO) {
-                    val external = if (notebookStorage?.usesImmutable == true) emptyList() else tree?.let { conflictDocuments?.scan(it) }.orEmpty()
                     val pending = File(directory, ".notes-incoming/notes").listFiles().orEmpty()
                         .filter { it.isFile && it.extension == "misq" }.map { ConflictSource(it) }
-                    store.scan(external + pending)
+                    store.scan(pending)
                 }
                 if (notebookStorage?.uri == tree) {
                     // The editor's current document is handled on the main thread after saving it.

@@ -12,7 +12,7 @@ import org.junit.rules.TemporaryFolder
 class ImmutableNoteStoreTest {
     @get:Rule val temp = TemporaryFolder()
     @Test fun lazyManifestPreservesPageOrderIndexedReadsAndIterationAcrossBoundaries() {
-        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("many pages")
+        val notes = MisqTestFiles(temp.newFolder()); val empty = notes.create("many pages")
         val refs = (1L..1025L).map { StrokeRef(it, UUID.randomUUID().toString()) }
         notes.save(empty.copy(strokes = refs, nextId = 1026), refs.associate {
             val y = (it.id % 3) * 1000f
@@ -38,7 +38,7 @@ class ImmutableNoteStoreTest {
         assertFalse(emptyStrokes.iterator().hasNext())
     }
     @Test fun visibleReadStillValidatesUnrequestedBytesAndTrailingDataInTheSamePack() {
-        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("shared pack")
+        val notes = MisqTestFiles(temp.newFolder()); val empty = notes.create("shared pack")
         val refs = (1L..2L).map { StrokeRef(it, UUID.randomUUID().toString()) }
         notes.save(empty.copy(strokes = refs, nextId = 3), refs.associate {
             val y = it.id * 100f
@@ -68,7 +68,7 @@ class ImmutableNoteStoreTest {
         assertThrows(Exception::class.java) { store.visible(root, 100f, 110f, emptySet()) }
     }
     private fun source(): MisqFile {
-        val notes = NoteFiles(temp.newFolder()); val empty = notes.create("source")
+        val notes = MisqTestFiles(temp.newFolder()); val empty = notes.create("source")
         val refs = (1L..3L).map { StrokeRef(it, UUID.randomUUID().toString()) }
         notes.save(empty.copy(strokes = refs, nextId = 4), refs.associate { it.storageId to StrokePlacement((it.id - 1) * 10000f, (it.id - 1) * 10000f, (it.id - 1) * 10000f + 20) }) {
             ByteArray(1024) { 7 }
@@ -116,29 +116,8 @@ class ImmutableNoteStoreTest {
         val reader = ImmutableNoteTransport(ImmutableNoteStore(temp.newFolder()), remote)
         assertThrows(IOException::class.java) { reader.withInventorySnapshot { reader.heads(root.info.id) } }
     }
-    @Test fun migrationInventoryRejectsEmptyPartialAndSubstitutedSourceLists() {
-        val a = UUID.randomUUID().toString(); val b = UUID.randomUUID().toString()
-        requireMigrationInventory(emptySet(), emptySet())
-        requireMigrationInventory(setOf(a, b), setOf(b, a))
-        for (actual in listOf(emptySet(), setOf(a), setOf(a, UUID.randomUUID().toString()))) {
-            assertThrows(IllegalStateException::class.java) { requireMigrationInventory(setOf(a, b), actual) }
-        }
-    }
-    @Test fun migrationRoundTripsAllHistoricalRecordsAndDoesNotChangeOriginal() {
-        val original = source(); val before = original.index(); val changed = before.manifest.strokes[1].copy(storageId = UUID.randomUUID().toString())
-        original.save(before.manifest.copy(strokes = listOf(changed, before.manifest.strokes[2])), mapOf(changed.storageId to StrokePlacement(5000f, 5000f, 5010f))) { byteArrayOf(9) }
-        val hash = NotebookArchive.digest(original.file)
-        val folder = temp.newFolder(); val migration = Format3Migration(folder)
-        val store = migration.migrate(listOf(original), emptyMap(), placements = { error("already placed") })
-        assertTrue(migration.active)
-        assertEquals(hash, NotebookArchive.digest(original.file))
-        val restored = File(temp.newFolder(), "${before.manifest.info.id}.misq")
-        store.export(store.list().single(), restored)
-        val actual = MisqFile(restored).index(); val expected = original.index()
-        assertEquals(expected.manifest, actual.manifest); assertEquals(expected.events, actual.events); assertEquals(expected.entities, actual.entities)
-        assertEquals(expected.records.mapValues { it.value.hash }, actual.records.mapValues { it.value.hash })
-        assertEquals(1, folder.listFiles()!!.count { it.name.startsWith("format3-rollback-") })
-    }
+
+
     @Test fun partialEditAndDeletionRetainUnreadReferencesAndNeverReadTheirBodies() {
         val original = source(); val store = ImmutableNoteStore(temp.newFolder())
         val initial = store.importNote(original); store.install(initial)
@@ -216,7 +195,7 @@ class ImmutableNoteStoreTest {
     @Test fun independentBackupRestoresCurrentEditsAndDeletionTombstones() {
         val source = source(); val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(source); store.install(root)
         val removed = store.remove(root); store.install(removed)
-        val backup = ImmutableNoteStore(temp.newFolder()); val migration = Format3Migration(temp.newFolder())
+        val backup = ImmutableNoteStore(temp.newFolder()); val migration = Format3Storage(temp.newFolder())
         migration.backup(store, backup)
         // Restoration must not read any object from the original repository or its cache.
         store.objectNames().forEach { File(store.directory, "objects/$it").writeBytes(byteArrayOf(0)) }
@@ -238,22 +217,10 @@ class ImmutableNoteStoreTest {
         assertThrows(Exception::class.java) { store.visible(root, 0f, 500f, emptySet()) }
         assertEquals(root.id, store.current(root.info.id)!!.id)
     }
-    @Test fun cancelledMigrationNeverActivatesAndRetainsOriginalBytes() {
-        val source = source(); val expected = NotebookArchive.digest(source.file); val root = temp.newFolder()
-        val migration = Format3Migration(root); var checks = 0
-        assertThrows(java.util.concurrent.CancellationException::class.java) {
-            migration.migrate(listOf(source), emptyMap(), checkpoint = { if (++checks == 6) throw java.util.concurrent.CancellationException() }, placements = { error("placed") })
-        }
-        assertFalse(migration.active); assertEquals(expected, NotebookArchive.digest(source.file))
-    }
-    @Test fun insufficientSpaceDoesNotStartMigrationOrModifyTheSource() {
-        val source = source(); val hash = NotebookArchive.digest(source.file); val folder = temp.newFolder()
-        val migration = Format3Migration(folder) { 0L }
-        assertThrows(IllegalStateException::class.java) { migration.migrate(listOf(source), emptyMap(), placements = { error("not reached") }) }
-        assertFalse(migration.active); assertTrue(folder.listFiles()!!.isEmpty()); assertEquals(hash, NotebookArchive.digest(source.file))
-    }
+
+
     @Test fun missingActivatedStoreCannotBeRecreatedAsAnEmptyLibrary() {
-        val folder = temp.newFolder(); val migration = Format3Migration(folder)
+        val folder = temp.newFolder(); val migration = Format3Storage(folder)
         val missing = "format3-${UUID.randomUUID()}"
         NoteFiles.atomicWrite(File(folder, ".format3-active"), JSONObject().put("format", 3).put("minWriter", 3).put("directory", missing).toString().toByteArray())
         assertThrows(IllegalStateException::class.java) { migration.open() }
@@ -316,13 +283,13 @@ class ImmutableNoteStoreTest {
     }
     @Test fun incompleteIndependentBackupCannotBeRestored() {
         val store = ImmutableNoteStore(temp.newFolder()); val root = store.importNote(source()); store.install(root)
-        val migration = Format3Migration(temp.newFolder()); val backup = ImmutableNoteStore(temp.newFolder()); var boundaries = 0
+        val migration = Format3Storage(temp.newFolder()); val backup = ImmutableNoteStore(temp.newFolder()); var boundaries = 0
         assertThrows(IOException::class.java) { migration.backup(store, backup) { if (++boundaries == 3) throw IOException("full disk") } }
         assertThrows(IOException::class.java) { migration.restoreBackup(backup, ImmutableNoteStore(temp.newFolder())) }
         assertEquals(root.id, store.current(root.info.id)!!.id)
     }
     @Test fun initialReadAndOneStrokeSaveAreBoundedBySpatialPagesRatherThanWholeNotebook() {
-        val files = NoteFiles(temp.newFolder()); val empty = files.create("large")
+        val files = MisqTestFiles(temp.newFolder()); val empty = files.create("large")
         val refs = (1L..4096L).map { StrokeRef(it, UUID.randomUUID().toString()) }
         val placements = refs.associate { ref -> val y = ((ref.id - 1) / 64) * 10000f; ref.storageId to StrokePlacement(y, y, y + 20) }
         files.save(empty.copy(strokes = refs, nextId = 4097), placements) { ByteArray(1024) { 7 } }
