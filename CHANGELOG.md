@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.0](https://github.com/akky1023/Misq-Notes/compare/v0.5.0...v0.6.0) (2026-11-07)
+
+
+### 機能追加
+
+* 直線描画機能 ([faa572c](https://github.com/akky1023/Misq-Notes/commit/faa572ccce0f5e06eac83ced1e195939a70d4ef7))
+
+
+### 修正
+
+* 旧方式のサポートを廃止 ([1f314ab](https://github.com/akky1023/Misq-Notes/commit/1f314abd691f2cc6f4aaddb31052a76c21e1fd56))
+* 硬直を修正 ([4ce1322](https://github.com/akky1023/Misq-Notes/commit/4ce132226acb44deb3ade4b3f04c83c0a812db7d))
+* 筆跡補正をリアルタイム化 ([2e22c58](https://github.com/akky1023/Misq-Notes/commit/2e22c58d02cbef3ed72735081b395eeb5f51fa01))
+
+
+### 性能改善
+
+* マージプレビューの配置を効率化 ([6ad43aa](https://github.com/akky1023/Misq-Notes/commit/6ad43aa8bce67afe10ec58bc1211297e7df22775))
+* 発熱を軽減した ([fc246a4](https://github.com/akky1023/Misq-Notes/commit/fc246a4fe840392f67d9a00c06832d3d5d3456c1))
+* 編集プレビューの配置を効率化 ([9e05793](https://github.com/akky1023/Misq-Notes/commit/9e05793f647949f84ac512d275092e86d254912a))
+
 ## [0.5.0](https://github.com/akky1023/Misq-Notes/compare/v0.4.0...v0.5.0) (2026-11-04)
 
 
