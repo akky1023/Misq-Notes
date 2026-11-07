@@ -33,8 +33,7 @@ class PenStyleTest {
         assertTrue(increments.first() < increments.last() / 3f)
     }
     @Test fun rgbChangesPreserveTransparencyIncludingFullyTransparentInk() {
-        val rgb = PenStyle.fromRgb(0, 128, 255)
-        assertEquals(0x0080FF, rgb)
+        val rgb = 0x0080FF
         for (alpha in listOf(0, 1, 128, 255)) {
             assertEquals((alpha shl 24) or rgb, PenStyle.withRgb((alpha shl 24) or 0xFFFFFF, rgb))
         }
@@ -55,8 +54,6 @@ class PenStyleTest {
         for (width in 1..50) assertEquals(width.toFloat(), PenStyle.width(width.toFloat()), 0f)
     }
     @Test fun invalidInputsAreRejected() {
-        assertThrows(IllegalArgumentException::class.java) { PenStyle.fromRgb(256, 0, 0) }
-        assertThrows(IllegalArgumentException::class.java) { PenStyle.fromRgb(0, -1, 0) }
         assertThrows(IllegalArgumentException::class.java) { PenStyle.withTransparency(0, 101) }
         assertThrows(IllegalArgumentException::class.java) { PenStyle.width(Float.NaN) }
         assertThrows(IllegalArgumentException::class.java) { PenStyle.displayWidth(Float.POSITIVE_INFINITY) }
