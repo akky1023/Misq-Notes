@@ -16,8 +16,19 @@ concurrency:
 
 jobs:
   build:
+    name: ${{ matrix.job }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job: build
+            tasks: ':app:assembleDebug :app:assembleRelease'
+          - job: test
+            tasks: ':app:testDebugUnitTest'
+          - job: lint
+            tasks: ':app:lintRelease'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,19 +42,24 @@ jobs:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
-      - name: Test, lint and build
-        run: bash ./gradlew :app:testDebugUnitTest :app:lintRelease :app:assembleDebug :app:assembleRelease --console=plain
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: Run ${{ matrix.job }}
+        env:
+          GRADLE_TASKS: ${{ matrix.tasks }}
+        run: bash ./gradlew $GRADLE_TASKS --console=plain
       - name: Upload test APK
+        if: matrix.job == 'build'
         uses: actions/upload-artifact@v4
         with:
           name: Misq-notes-test-${{ github.run_number }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
       - name: Upload reports
-        if: always()
+        if: always() && matrix.job != 'build'
         uses: actions/upload-artifact@v4
         with:
-          name: android-reports-${{ github.run_number }}
+          name: android-${{ matrix.job }}-reports-${{ github.run_number }}
           path: |
             app/build/reports/tests/
             app/build/reports/lint-results-release.*
