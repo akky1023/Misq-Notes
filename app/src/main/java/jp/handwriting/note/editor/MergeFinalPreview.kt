@@ -13,6 +13,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
@@ -89,9 +90,10 @@ internal fun MergeFinalPaper(session: MergeReviewSession, strength: MergeStrengt
                 val height = with(density) { travel.toPx() }
                 if (height > 0f) handlePosition = (handlePosition + delta / height).coerceIn(0f, 1f)
             }, onAdjustmentEnd = { onLayout(preferredWidth, handlePosition) },
-            modifier = Modifier.align(Alignment.TopStart).offset(
-                x = (if (preferences.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * fraction else previewWidth - 24.dp * fraction)
-                    .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp)),
-                y = travel * handlePosition).size(48.dp, 80.dp))
+            modifier = Modifier.align(Alignment.TopStart).offset {
+                val x = (if (preferences.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * fraction else previewWidth - 24.dp * fraction)
+                    .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp))
+                IntOffset(x.roundToPx(), (travel * handlePosition).roundToPx())
+            }.size(48.dp, 80.dp))
     }
 }

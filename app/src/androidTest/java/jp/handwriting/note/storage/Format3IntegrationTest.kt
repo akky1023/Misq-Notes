@@ -14,6 +14,7 @@ import jp.handwriting.note.editor.*
 import java.io.File
 import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -37,10 +38,12 @@ class Format3IntegrationTest {
         var tree: Uri? = null
         try {
             val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
-            val files = NoteFiles(File(folder, "notes")); val empty = files.create("three regions")
+            val files = storage.noteFiles(); val empty = files.create("three regions")
             val entries = listOf(stroke(1, 100f), stroke(2, 10000f), stroke(3, 20000f))
             val manifest = empty.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
             NoteRepository(files).save(NoteSnapshot(manifest, entries))
+            val exchange = File(folder, "exchange-source/${manifest.info.id}.misq").also { it.parentFile!!.mkdirs() }
+            files.format3.export(manifest.info.id, exchange)
             if (external) {
                 @Suppress("DEPRECATION")
                 val selected = provider("test-new-tree")!!.getParcelable<Uri>("tree")!!
@@ -70,7 +73,6 @@ class Format3IntegrationTest {
     }
     @Test fun partialNoteSupportsContinuousSwipePinchAndLoadsFinalViewport() = runBlocking {
         fixture { folder, storage, manifest, _ ->
-            storage.migrateFormat3()
             val models = ViewModelStore()
             val model = withContext(Dispatchers.Main) {
                 ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
@@ -112,8 +114,30 @@ class Format3IntegrationTest {
                     touch(move, 500f to 100f)
                     assertEquals(800f, model.viewport.position.top, .01f)
                     touch(up, 500f to 100f)
+                    // No UI turn/IO completion between lifting the finger and
+                    // changing tools or starting the next document operation.
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    val operation = model.edits.reserveStroke()
+                    model.edits.resolveStroke(operation, stroke(operation, 900f).value)
+                    assertTrue(model.ui.value.canUndo)
+                    model.edits.undo()
+                    assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
                 }
                 ready()
+                val loadingInteraction = async(Dispatchers.Main.immediate) {
+                    model.ui.first { it.loadingRegion }
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    // Keep the Ink handoff pending while the old content arrives.
+                    model.edits.reserveStroke()
+                }
                 withContext(Dispatchers.Main) {
                     val display = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                         .getDisplay(android.view.Display.DEFAULT_DISPLAY)
@@ -138,15 +162,41 @@ class Format3IntegrationTest {
                     touch(android.view.MotionEvent.ACTION_MOVE, 350f, 650f)
                     assertEquals(1.5f, model.viewport.position.zoom, .01f)
                     touch(android.view.MotionEvent.ACTION_POINTER_UP or (1 shl android.view.MotionEvent.ACTION_POINTER_INDEX_SHIFT), 350f, 650f)
-                    // Continue panning with the remaining finger to an unread region.
+                    touch(android.view.MotionEvent.ACTION_UP, 350f)
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.HIGHLIGHTER)
+                    assertEquals(EditorTool.HIGHLIGHTER, model.ui.value.tool)
+                    model.chooseTool(EditorTool.PEN)
+                    assertEquals(EditorTool.PEN, model.ui.value.tool)
+                    touch(android.view.MotionEvent.ACTION_DOWN, 350f)
+                    // Start another pan immediately, this time to an unread region.
                     touch(android.view.MotionEvent.ACTION_MOVE, 350f, y = -13000f)
                     touch(android.view.MotionEvent.ACTION_UP, 350f, y = -13000f)
                     assertFalse(model.viewportGestureActive)
+                }
+                val drawing = withTimeout(30000) { loadingInteraction.await() }
+                withContext(Dispatchers.Main) {
+                    assertTrue(model.ui.value.loadingRegion)
+                    assertFalse(model.edits.snapshot().any { it.id == 2L })
+                    model.edits.resolveStroke(drawing, stroke(drawing, 10100f).value)
+                    assertTrue(model.ui.value.canUndo)
+                }
+                withTimeout(30000) {
+                    while (model.edits.snapshot().none { it.id == 2L }) delay(10)
                 }
                 ready()
                 assertTrue(model.edits.snapshot().any { it.id == 2L })
                 assertFalse(model.edits.snapshot().any { it.id == 3L })
                 assertNull(model.workspace.value.error)
+                withContext(Dispatchers.Main) {
+                    model.edits.undo()
+                    assertTrue(model.edits.snapshot().any { it.id == 2L })
+                    assertFalse(model.edits.snapshot().any { it.id == drawing })
+                    model.fitWidth()
+                    assertFalse(model.ui.value.busy)
+                    model.chooseTool(EditorTool.ERASER)
+                    assertEquals(EditorTool.ERASER, model.ui.value.tool)
+                }
                 withContext(Dispatchers.Main) { model.closeNote() }
                 ready()
             } finally {
@@ -155,9 +205,9 @@ class Format3IntegrationTest {
             }
         }
     }
-    @Test fun editorMigratesSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
+    @Test fun editorSavesReopensAndExportsWithoutDailyMisqReconstruction() = runBlocking {
         fixture { folder, storage, manifest, _ ->
-            val before = NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq"))
+            val before = ContentHash.digest(File(folder, "exchange-source/${manifest.info.id}.misq"))
             val models = ViewModelStore(); val model = withContext(Dispatchers.Main) {
                 ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
                     it.viewport.size(1000f, 1000f); it.configureStorage(context, folder, File(folder, "ui-cache")); it.start(folder)
@@ -166,9 +216,8 @@ class Format3IntegrationTest {
             suspend fun waitFor(check: () -> Boolean) { withTimeout(30000) { while (!check()) delay(10) } }
             try {
                 waitFor { !model.workspace.value.working }
-                withContext(Dispatchers.Main) { model.migrateStorageFormat() }
                 waitFor { !model.workspace.value.working && model.storageLocation.value.format3 }
-                assertEquals(before, NotebookArchive.digest(File(folder, "notes/${manifest.info.id}.misq")))
+                assertEquals(before, ContentHash.digest(File(folder, "exchange-source/${manifest.info.id}.misq")))
                 withContext(Dispatchers.Main) { model.openNote(manifest.info.id) }
                 waitFor { model.workspace.value.current?.id == manifest.info.id && !model.ui.value.busy && !model.workspace.value.working && !model.ui.value.loadingRest }
                 assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
@@ -195,13 +244,13 @@ class Format3IntegrationTest {
                 withContext(Dispatchers.Main) { model.closeNote() }
                 waitFor { model.workspace.value.current == null && !model.workspace.value.working }
             } finally { val job = model.viewModelScope.coroutineContext[Job]!!; withContext(Dispatchers.Main) { models.clear() }; job.join() }
-            assertFalse(storage.usesImmutable) // The separate, idle fixture instance was not mutated.
+            assertTrue(storage.usesImmutable)
         }
     }
-    @Test fun externalMigrationRetainsLegacyAndRoundTripsPartialEditsAcrossRestart() = runBlocking {
+    @Test fun externalImportedNoteRetainsOriginalAndRoundTripsPartialEditsAcrossRestart() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.usesImmutable); assertTrue(withTimeout(30000) { storage.awaitSync() })
-            val old = File(folder, "notes/${manifest.info.id}.misq"); val expected = NotebookArchive.digest(old)
+            assertTrue(storage.usesImmutable); assertTrue(withTimeout(30000) { storage.awaitSync() })
+            val old = File(folder, "exchange-source/${manifest.info.id}.misq"); val expected = ContentHash.digest(old)
             val repository = NoteRepository(storage.noteFiles(), persist = { storage.write(it) })
             val visible = repository.loadVisible(manifest.info.id, 1f); assertTrue(visible.partial); assertEquals(listOf(1L), visible.entries.map { it.id })
             val moved = OrderedEdits.Entry(1L, entries[0].value.translated(0f, 6000f))
@@ -218,31 +267,20 @@ class Format3IntegrationTest {
             val loaded = NoteRepository(restarted.noteFiles()).load(manifest.info.id)
             assertEquals("edited in packs", loaded.manifest.info.title)
             assertEquals(listOf(moved.value.storageId, entries[1].value.storageId, entries[2].value.storageId), loaded.entries.map { it.value.storageId })
-            assertEquals(expected, NotebookArchive.digest(old))
+            assertEquals(expected, ContentHash.digest(old))
             val exported = restarted.noteFiles().document(manifest.info.id)
             exported.validate(); assertEquals(3, exported.index().manifest.strokes.size)
             assertTrue(exported.index().events.size > manifest.strokes.size)
             } finally { restartedScope.coroutineContext[Job]!!.cancelAndJoin() }
         }
     }
-    @Test fun cancelledMigrationLeavesLegacyUsableAndActivationAbsent() = runBlocking {
-        fixture { folder, storage, manifest, _ ->
-            val original = File(folder, "notes/${manifest.info.id}.misq"); val expected = NotebookArchive.digest(original)
-            var checkpoints = 0
-            try { storage.migrateFormat3 { if (++checkpoints == 6) throw CancellationException("simulated interruption") }; fail("must interrupt") }
-            catch (_: CancellationException) { }
-            assertFalse(Format3Migration(folder).active); assertFalse(storage.usesImmutable)
-            assertEquals(expected, NotebookArchive.digest(original))
-            assertEquals(3, NoteRepository(storage.noteFiles()).load(manifest.info.id).entries.size)
-        }
-    }
     @Test fun concurrentLibrarySettingsAreRetainedAndCanBeExplicitlyResolved() = runBlocking {
         fixture(external = true) { folder, storage, _, _ ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val library = storage.noteFiles().format3!!; val store = library.store
             val base = store.current(Format3Library.SETTINGS_ID)!!
             val other = ImmutableNoteStore(File(folder, "another-device"))
-            Format3Migration(folder).backup(store, other)
+            Format3Storage(folder).backup(store, other)
             val json = org.json.JSONObject(String(store.thumbnail(base)!!, Charsets.UTF_8))
             val original = NotebookFolders.decode(LibraryJson.unwrap(java.util.Base64.getDecoder().decode(json.getString("folders.hwp"))))
             val remoteFolders = original.added("from other device", null)
@@ -265,7 +303,7 @@ class Format3IntegrationTest {
     }
     @Test fun blockedPreviewDownloadDoesNotBlockDurableEditingOrPublishAnOlderPreview() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val root = library.store.current(manifest.info.id)!!
             val firstPack = library.store.find(root, setOf(1)).getValue(1).body.objectId
             assertTrue(File(library.store.directory, "objects/$firstPack").delete())
@@ -286,10 +324,10 @@ class Format3IntegrationTest {
     }
     @Test fun divergentAppendIsResolvedThroughExistingConflictHandlingWithoutLosingEitherParent() = runBlocking {
         fixture(external = true) { folder, storage, manifest, _ ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val store = library.store
             val base = store.current(manifest.info.id)!!
-            val other = ImmutableNoteStore(File(folder, "another-device")); Format3Migration(folder).backup(store, other)
+            val other = ImmutableNoteStore(File(folder, "another-device")); Format3Storage(folder).backup(store, other)
             val appended = stroke(4, 300f)
             val foreign = other.edit(other.root(base.id), base.info, 5, emptySet(), listOf(
                 StrokeRef(4, appended.value.storageId) to (appended.value.placement to NoteRepository.encodeStroke(appended.value))))
@@ -309,7 +347,7 @@ class Format3IntegrationTest {
     }
     @Test fun cancelledViewportDownloadDoesNotHoldTheDurableSaveLock() = runBlocking {
         fixture(external = true) { folder, storage, manifest, entries ->
-            storage.migrateFormat3(); assertTrue(storage.awaitSync())
+            assertTrue(storage.awaitSync())
             val files = storage.noteFiles(); val library = files.format3!!; val root = library.store.current(manifest.info.id)!!
             val missing = library.store.find(root, setOf(2)).getValue(2).body.objectId
             val body = File(library.store.directory, "objects/$missing"); assertTrue(body.delete())

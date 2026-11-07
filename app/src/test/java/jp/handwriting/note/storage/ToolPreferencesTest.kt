@@ -25,8 +25,8 @@ class ToolPreferencesTest {
         ToolPreferencesFile(file).write(value)
         assertEquals(value, ToolPreferencesFile(file).read())
         val current = NoteFiles.readEnvelope(file)
-        // Version 9 omits the lasso mode and the two media preferences.
-        val previous = current.copyOf(current.size - 6)
+        // Version 9 omits the lasso mode, media preferences, and shape preferences.
+        val previous = current.copyOf(current.size - 8)
         previous[3] = 9
         NoteFiles.atomicWrite(file, previous)
         val loaded = ToolPreferencesFile(file).read()
@@ -40,7 +40,7 @@ class ToolPreferencesTest {
         ToolPreferencesFile(file).write(value)
         assertEquals(value, ToolPreferencesFile(file).read())
         val current = NoteFiles.readEnvelope(file)
-        val previous = current.copyOf(current.size - 2)
+        val previous = current.copyOf(current.size - 4)
         previous[3] = 10
         NoteFiles.atomicWrite(file, previous)
         assertEquals(value.copy(pinchResizeMedia = true, lassoIncludeMedia = false), ToolPreferencesFile(file).read())
@@ -54,6 +54,23 @@ class ToolPreferencesTest {
             assertEquals(enabled, restored.lassoIncludeMedia)
             ToolPreferencesFile(file).write(restored.copy(pinchResizeMedia = !restored.pinchResizeMedia))
             assertEquals(enabled, ToolPreferencesFile(file).read().lassoIncludeMedia)
+        }
+    }
+    @Test fun versionElevenKeepsExistingOptionsAndEnablesShapeDefaults() {
+        val file = File(temp.newFolder(), "tools.hwp")
+        val old = ToolPreferences(pinchResizeMedia = false, lassoIncludeMedia = true, drawShapes = false, snapShapes = false)
+        ToolPreferencesFile(file).write(old)
+        val bytes = NoteFiles.readEnvelope(file).let { it.copyOf(it.size - 2) }
+        bytes[3] = 11
+        NoteFiles.atomicWrite(file, bytes)
+        assertEquals(old.copy(drawShapes = true, snapShapes = true), ToolPreferencesFile(file).read())
+    }
+    @Test fun shapeTogglesSurviveRestartIndependently() {
+        val file = File(temp.newFolder(), "tools.hwp")
+        for (draw in listOf(false, true)) for (snap in listOf(false, true)) {
+            val value = ToolPreferences(drawShapes = draw, snapShapes = snap)
+            ToolPreferencesFile(file).write(value)
+            assertEquals(value, ToolPreferencesFile(file).read())
         }
     }
     @Test fun allThreeButtonActionsSurviveRestart() {

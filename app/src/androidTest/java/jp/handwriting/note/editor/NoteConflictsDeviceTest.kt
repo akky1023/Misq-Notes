@@ -31,8 +31,7 @@ class NoteConflictsDeviceTest {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         assertEquals("net.neomenia.misqnotes.probe", context.packageName)
         val notes = File(context.filesDir, "notes").apply { mkdirs() }
-        NoteListCache(notes).changing()
-        val files = NoteFiles(notes)
+        val files = MisqTestFiles(notes)
         val empty = files.create("コンフリクト確認用")
         fun line(color: Int, points: List<Pair<Float, Float>>): EditorStroke {
             val inputs = MutableStrokeInputBatch()
@@ -52,7 +51,7 @@ class NoteConflictsDeviceTest {
             strokes = original.strokes + StrokeRef(3, additional.storageId), nextId = 4)
         val stage = File(context.cacheDir, "conflict-fixture-manual-${UUID.randomUUID()}").apply { mkdirs() }
         try {
-            val writer = NoteFiles(stage)
+            val writer = MisqTestFiles(stage)
             writer.save(version) { payloads.getValue(it) }
             val alias = File(notes, "コンフリクト確認用-${original.info.id.take(8)}-別版.misq")
             writer.document(original.info.id).file.copyTo(alias)
@@ -64,9 +63,9 @@ class NoteConflictsDeviceTest {
     }
 
     private fun fixture(root: File): Pair<NoteManifest, File> {
-        val files = NoteFiles(File(root, "notes"))
+        val files = MisqTestFiles(File(root, "notes"))
         val original = files.create("fixture original")
-        val stage = NoteFiles(File(root, "source"))
+        val stage = MisqTestFiles(File(root, "source"))
         val stroke = EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), 0xff202124.toInt(), 3f, 0.01f),
             MutableStrokeInputBatch().add(InputToolType.STYLUS, 100f, 100f, 0).add(InputToolType.STYLUS, 200f, 100f, 20)))
         val local = EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), 0xff4285f4.toInt(), 3f, 0.01f),
@@ -102,12 +101,12 @@ class NoteConflictsDeviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
         val (_, source) = fixture(root)
-        val unrelated = NoteFiles(File(root, "notes")).create("unrelated")
+        val unrelated = MisqTestFiles(File(root, "notes")).create("unrelated")
         val busy = java.util.concurrent.atomic.AtomicInteger()
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main.immediate)
         lateinit var model: EditorViewModel
         try {
-            ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", root.path)).use { scenario ->
+            ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(root).path)).use { scenario ->
                 scenario.onActivity { model = it.model }
                 waitFor { !model.workspace.value.working && model.workspace.value.notes.size == 2 }
                 SystemClock.sleep(300)
@@ -133,11 +132,11 @@ class NoteConflictsDeviceTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
         val (original, _) = fixture(root)
-        val files = NoteFiles(File(root, "notes"))
+        val files = MisqTestFiles(File(root, "notes"))
         fun stroke(x: Float) = EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), 0xff202124.toInt(), 3f, 0.01f),
             MutableStrokeInputBatch().add(InputToolType.STYLUS, x, 400f, 0).add(InputToolType.STYLUS, x + 100f, 500f, 20)))
         lateinit var model: EditorViewModel
-        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", root.path)).use { scenario ->
+        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(root).path)).use { scenario ->
             scenario.onActivity { model = it.model }
             waitFor { !model.workspace.value.working }
             scenario.onActivity { model.openNote(original.info.id) }
@@ -154,13 +153,13 @@ class NoteConflictsDeviceTest {
                 NoteRepository.encodeStroke(extra)
             }
             val alias = File(root, "notes/append-from-other-device.misq").also { remoteFile.copyTo(it) }
-            val hash = NotebookArchive.digest(alias.readBytes())
+            val hash = ContentHash.digest(alias.readBytes())
             val checker = NoteConflicts(File(root, "notes"), File(root, "unhandled-check"))
             val conflict = checker.scan().single()
             scenario.onActivity { model.refreshConflicts() }
             waitFor { model.edits.entries.size == 3 && model.mergeReview.value.conflict == null && model.conflicts.value.items.isEmpty() }
             assertEquals(original.info.id, model.workspace.value.current!!.id)
-            assertEquals(hash, NotebookArchive.digest(alias.readBytes()))
+            assertEquals(hash, ContentHash.digest(alias.readBytes()))
             scenario.onActivity { model.edits.undo() }
             assertEquals(setOf(original.strokes.single().storageId, extra.storageId), model.edits.entries.map { it.storageId }.toSet())
             waitFor { files.read(original.info.id).manifest.strokes.size == 2 && !model.workspace.value.saving }
@@ -173,14 +172,14 @@ class NoteConflictsDeviceTest {
     @Test fun libraryImportsOneSidedAppendBeforeShowingConflictButton() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
-        val files = NoteFiles(File(root, "notes")); val original = files.create("append fixture")
-        val stage = NoteFiles(File(root, "source"))
+        val files = MisqTestFiles(File(root, "notes")); val original = files.create("append fixture")
+        val stage = MisqTestFiles(File(root, "source"))
         val stroke = EditorStroke(Stroke(Brush.createWithColorIntArgb(StockBrushes.marker(), 0xff202124.toInt(), 3f, 0.01f),
             MutableStrokeInputBatch().add(InputToolType.STYLUS, 100f, 100f, 0).add(InputToolType.STYLUS, 200f, 200f, 20)))
         stage.save(original.copy(strokes = listOf(StrokeRef(1, stroke.storageId)), nextId = 2)) { NoteRepository.encodeStroke(stroke) }
         stage.document(original.info.id).file.copyTo(File(root, "notes/append.misq"))
         lateinit var model: EditorViewModel
-        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", root.path)).use { scenario ->
+        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(root).path)).use { scenario ->
             scenario.onActivity { model = it.model }
             waitFor { files.read(original.info.id).manifest.strokes.size == 1 && !model.workspace.value.working }
             assertNull(model.workspace.value.current)
@@ -194,7 +193,7 @@ class NoteConflictsDeviceTest {
         val (original, source) = fixture(root)
         val originalFile = File(root, "notes/${original.info.id}.misq")
         lateinit var model: EditorViewModel
-        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", root.path)).use { scenario ->
+        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(root).path)).use { scenario ->
             scenario.onActivity { model = it.model }
             waitFor { !model.workspace.value.working && model.workspace.value.notes.size == 1 }
             val conflictsLabel = AppMessages.text(R.string.conflicts)
@@ -203,7 +202,7 @@ class NoteConflictsDeviceTest {
             waitFor { model.workspace.value.current != null && !model.workspace.value.working }
             val alias = File(root, "notes/another tool chose this name.misq")
             source.copyTo(alias)
-            val aliasHash = NotebookArchive.digest(alias.readBytes())
+            val aliasHash = ContentHash.digest(alias.readBytes())
             scenario.onActivity { model.refreshConflicts() }
             waitFor { find(conflictsLabel) != null }
             val settingsBounds = android.graphics.Rect(); val conflictBounds = android.graphics.Rect()
@@ -236,18 +235,18 @@ class NoteConflictsDeviceTest {
             assertEquals(original.info.title, retained.info.title)
             assertEquals(original.info.paper, retained.info.paper)
             assertEquals(original.strokes, retained.strokes)
-            assertEquals(aliasHash, NotebookArchive.digest(alias.readBytes()))
+            assertEquals(aliasHash, ContentHash.digest(alias.readBytes()))
         }
     }
     @Test fun editorHidesOtherNotesConflictsWhileLibraryStillShowsAllConflicts() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = File(instrumentation.targetContext.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
         val (original, source) = fixture(root)
-        val files = NoteFiles(File(root, "notes"))
+        val files = MisqTestFiles(File(root, "notes"))
         val unrelated = files.create("unrelated note")
         source.copyTo(File(root, "notes/another version.misq"))
         lateinit var model: EditorViewModel
-        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", root.path)).use { scenario ->
+        ActivityScenario.launch<ConflictFixtureActivity>(Intent(instrumentation.targetContext, ConflictFixtureActivity::class.java).putExtra("fixture", prepareModernReview(root).path)).use { scenario ->
             scenario.onActivity { model = it.model }
             waitFor { !model.workspace.value.working && model.conflicts.value.items.size == 1 }
             val label = AppMessages.text(R.string.conflicts)
@@ -266,35 +265,5 @@ class NoteConflictsDeviceTest {
             waitFor { find(AppMessages.text(R.string.notes)) != null }
             waitFor { find(label) != null }
         }
-    }
-    @Test fun safAliasesAreReadByEmbeddedIdAndCachedWithoutAccumulatingVersions() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        val permission = context.contentResolver.persistedUriPermissions.firstOrNull {
-            it.isReadPermission && it.isWritePermission && it.uri.toString().contains("MisqStorageTest-20261026")
-        }
-        assumeNotNull(permission)
-        val tree = permission!!.uri
-        val parent = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
-        val folder = checkNotNull(DocumentsContract.createDocument(context.contentResolver, parent, DocumentsContract.Document.MIME_TYPE_DIR,
-            "conflict-fixture-${UUID.randomUUID()}"))
-        val local = File(context.cacheDir, "conflict-fixture-${UUID.randomUUID()}").apply { mkdirs() }
-        val (note, source) = fixture(local)
-        val documents = ConflictDocuments(context.contentResolver, File(local, "cache"))
-        try {
-            val canonical = checkNotNull(DocumentsContract.createDocument(context.contentResolver, folder, "application/octet-stream", "${note.info.id}.misq"))
-            val alias = checkNotNull(DocumentsContract.createDocument(context.contentResolver, folder, "application/octet-stream", "totally arbitrary name.misq"))
-            listOf(canonical, alias).forEach { uri -> context.contentResolver.openOutputStream(uri, "wt")!!.use { out -> source.inputStream().use { it.copyTo(out) } } }
-            val first = documents.scan(folder)
-            assertEquals(1, first.size)
-            assertEquals("totally arbitrary name.misq", first.single().name)
-            val reader = MisqFile(source)
-            val before = reader.readManifest().manifest
-            reader.save(before.copy(info = before.info.copy(title = "edited other version"))) { error("retained inputs") }
-            context.contentResolver.openOutputStream(alias, "wt")!!.use { out -> source.inputStream().use { it.copyTo(out) } }
-            val next = documents.scan(folder)
-            assertEquals(first.single().file, next.single().file)
-            assertEquals(1, File(local, "cache").listFiles().orEmpty().size)
-            assertEquals("edited other version", MisqFile(next.single().file, readOnlyAlias = true).readManifest().manifest.info.title)
-        } finally { DocumentsContract.deleteDocument(context.contentResolver, folder) }
     }
 }

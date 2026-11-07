@@ -1,7 +1,6 @@
 package jp.handwriting.note.editor
 
 import kotlin.math.pow
-import kotlin.math.roundToInt
 
 /** Monotone cubic Bezier from (0, 0) to (1, 1), with integer-percent handles. */
 internal data class BezierControls(val x1: Int = 33, val y1: Int = 33, val x2: Int = 67, val y2: Int = 67) {
@@ -97,18 +96,6 @@ internal data class PressureCurve(
     fun asHandleCurve(): PressureCurve {
         val handled = asPassingCurve().spline!!.withHandles()
         return if (spline == handled) this else PressureCurve(handled.minimumPercent, spline = handled)
-    }
-    fun asControlBezier(): PressureCurve {
-        if (spline?.basis == PressureBasis.BEZIER_CONTROLS) return this
-        val points = spline?.points ?: asBezier().let { old ->
-            val c = old.bezier!!
-            val x1 = c.x1.coerceIn(1, 98); val x2 = c.x2.coerceIn(x1 + 1, 99)
-            fun absoluteY(y: Int) = (minimumPercent + (100 - minimumPercent) * y / 100f).roundToInt()
-            listOf(PressureControlPoint(0, minimumPercent), PressureControlPoint(x1, absoluteY(c.y1)),
-                PressureControlPoint(x2, absoluteY(c.y2)), PressureControlPoint(100, 100))
-        }
-        val controls = PressureSpline(points, PressureBasis.BEZIER_CONTROLS)
-        return PressureCurve(controls.minimumPercent, spline = controls)
     }
     companion object {
         fun editableDefault() = PressureCurve(spline = PressureSpline(listOf(

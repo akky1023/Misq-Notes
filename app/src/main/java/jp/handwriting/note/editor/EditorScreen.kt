@@ -15,7 +15,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -27,6 +26,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -115,6 +115,7 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                             onRetryPalette = model::retryPalette,
                             onSaveWidth = model::saveWidth,
                             onRetryPreferences = model::retryPreferences,
+                            onDrawShapes = model::drawShapes, onSnapShapes = model::snapShapes,
                             onUndo = model.edits::undo,
                             onRedo = model.edits::redo,
                             onToolOrder = model::toolOrder,
@@ -204,9 +205,12 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                         if (travel > 0f) previewHandlePosition = (previewHandlePosition + delta / travel).coerceIn(0f, 1f)
                     },
                     modifier = Modifier.align(Alignment.TopStart)
-                        .offset(x = (if (library.value.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * previewFraction
-                            else previewWidth - 24.dp * previewFraction)
-                            .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp)), y = handleTravel * previewHandlePosition)
+                        .offset {
+                            val x = (if (library.value.previewOnRight) maxWidth - previewWidth - 48.dp + 24.dp * previewFraction
+                                else previewWidth - 24.dp * previewFraction)
+                                .coerceIn(0.dp, (maxWidth - 48.dp).coerceAtLeast(0.dp))
+                            IntOffset(x.roundToPx(), (handleTravel * previewHandlePosition).roundToPx())
+                        }
                         .size(width = 48.dp, height = 80.dp))
             }
         }

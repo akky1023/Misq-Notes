@@ -48,7 +48,7 @@ internal object PackedNoteExperiment {
                 val hash = ByteArray(32).also(stream::readFully)
                 val bytes = ByteArray(size).also(stream::readFully)
                 check(MessageDigest.getInstance("SHA-256").digest(bytes).contentEquals(hash))
-                check(NotebookArchive.digest(bytes) == expected.getValue(path))
+                check(ContentHash.digest(bytes) == expected.getValue(path))
             }
             check(stream.read() == -1)
         }

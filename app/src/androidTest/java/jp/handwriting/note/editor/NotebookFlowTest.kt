@@ -75,7 +75,7 @@ class NotebookFlowTest {
             ready { it.current?.position == position }
             withContext(Dispatchers.Main) { model.closeNote() }
             ready { it.current == null }
-            val saved = jp.handwriting.note.storage.NoteFiles(File(root, "notes")).read(original.id).manifest
+            val saved = jp.handwriting.note.storage.NoteFiles.open(File(root, "notes")).read(original.id).manifest
             assertEquals(position, saved.info.position)
             assertEquals(1, saved.strokes.size)
             assertTrue(saved.info.updatedAt > original.updatedAt)

@@ -170,7 +170,6 @@ class EditorViewModel : ViewModel() {
     private val mutableConflicts = MutableStateFlow(ConflictsUi())
     internal val conflicts = mutableConflicts.asStateFlow()
     private var conflictStore: NoteConflicts? = null
-    private var conflictDocuments: ConflictDocuments? = null
     private var conflictScan: kotlinx.coroutines.Job? = null
     private val mutableMergeReview = MutableStateFlow(MergeReviewUi())
     internal val mergeReview = mutableMergeReview.asStateFlow()
@@ -180,7 +179,6 @@ class EditorViewModel : ViewModel() {
     internal fun configureStorage(context: android.content.Context, directory: File = context.filesDir, cache: File = context.cacheDir) {
         initialAspect = context.resources.displayMetrics.let { it.heightPixels.toFloat() / it.widthPixels.coerceAtLeast(1) }
         mergeCache = File(cache, "merge-reviews")
-        conflictDocuments = conflictDocuments ?: ConflictDocuments(context.contentResolver, File(cache, "conflict-sources"))
         if (notebookStorage == null) {
             notebookStorage = NotebookStorage(context.applicationContext, directory, viewModelScope)
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
@@ -243,8 +241,7 @@ class EditorViewModel : ViewModel() {
                 positionSaves = SaveQueue(viewModelScope, batchMillis = 500) { (id, position) ->
                     withContext(Dispatchers.IO) { viewPositions!!.write(id, position) }
                 }
-                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles(File(directory, "notes")),
-                    NoteListCache(File(directory, "notes"))) { action ->
+                repository = withContext(Dispatchers.IO) { NoteRepository(notebookStorage?.noteFiles() ?: NoteFiles.open(File(directory, "notes"))) { action ->
                     notebookStorage?.write(action) ?: action()
                 } }
                 val noteDirectory = notebookStorage?.noteFiles()?.directory ?: File(directory, "notes")
@@ -280,18 +277,10 @@ class EditorViewModel : ViewModel() {
                     mutablePreferences.value = mutablePreferences.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.settings_save_failed, it) } ?: mutablePreferences.value.error?.takeIf { state.latest == 0L })
                 } }
-                previewSaves = SaveQueue(viewModelScope, batchMillis = 1000) { snapshot -> withContext(Dispatchers.IO) {
+                previewSaves = SaveQueue(viewModelScope, batchMillis = 1000, debounce = true) { snapshot -> withContext(Dispatchers.IO) {
                     repository!!.updatePreview(snapshot)
                 } }
                 notebookStorage?.beforeExternalSave = { previewSaves?.flush(); Unit }
-                notebookStorage?.afterExternalSave = {
-                    // Serialize eviction with repository reads, after provider IO has finished.
-                    // Cleanup failure must not turn a successful external save into a failed one.
-                    withContext(Dispatchers.IO) {
-                        runCatching { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
-                            .onFailure { android.util.Log.w("MisqStorage", "Saved working copies could not be released", it) }
-                    }
-                }
                 saves = SaveQueue(viewModelScope, batchMillis = 500) { request ->
                     val immutable = repository!!.usesImmutable
                     val saved = withContext(Dispatchers.IO) {
@@ -337,10 +326,9 @@ class EditorViewModel : ViewModel() {
         conflictScan = viewModelScope.launch {
             try {
                 val items = withContext(Dispatchers.IO) {
-                    val external = if (notebookStorage?.usesImmutable == true) emptyList() else tree?.let { conflictDocuments?.scan(it) }.orEmpty()
                     val pending = File(directory, ".notes-incoming/notes").listFiles().orEmpty()
                         .filter { it.isFile && it.extension == "misq" }.map { ConflictSource(it) }
-                    store.scan(external + pending)
+                    store.scan(pending)
                 }
                 if (notebookStorage?.uri == tree) {
                     // The editor's current document is handled on the main thread after saving it.
@@ -373,7 +361,6 @@ class EditorViewModel : ViewModel() {
                     val candidate = remaining.firstOrNull { it.noteId == current }
                     if (candidate != null && !mutableUi.value.busy && !mutableWorkspace.value.working && !closing &&
                         withContext(Dispatchers.IO) { store.canAutoMerge(candidate) }) beginMerge(candidate, listOf(candidate))
-                    withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 }
             } catch (e: Exception) {
                 mutableConflicts.value = mutableConflicts.value.copy(error = e.localizedMessage ?: AppMessages.text(R.string.operation_failed))
@@ -562,24 +549,6 @@ class EditorViewModel : ViewModel() {
             } catch (e: Exception) { fail(e) }
         }
     }
-    internal fun migrateStorageFormat() {
-        val storage = notebookStorage ?: return
-        val directory = storageDirectory ?: return
-        if (mutableWorkspace.value.working || mutableWorkspace.value.current != null || storage.usesImmutable) return
-        beginWork(R.string.storage_migrating)
-        viewModelScope.launch {
-            try {
-                check(saves?.flush() != false && librarySaves?.flush() != false && paletteSaves?.flush() != false && preferenceSaves?.flush() != false) { AppMessages.text(R.string.wait_note) }
-                previewSaves?.flush()
-                val context = currentCoroutineContext()
-                storage.migrateFormat3 { context.ensureActive() }
-                repository = withContext(Dispatchers.IO) { NoteRepository(storage.noteFiles(), persist = { storage.write(it) }) }
-                conflictStore = NoteConflicts(storage.noteFiles().directory, File(directory, "conflicts"),
-                    remoteContains = storage::contains, ensure = storage::ensure, includeHistory = true)
-                refreshStorageLocation(); refreshList()
-            } catch (e: Exception) { fail(e) }
-        }
-    }
     internal fun resolveStorageSettings(id: String) {
         val storage = notebookStorage ?: return; val directory = storageDirectory ?: return
         if (mutableWorkspace.value.working || mutableWorkspace.value.current != null) return
@@ -702,7 +671,6 @@ class EditorViewModel : ViewModel() {
             try {
                 withContext(Dispatchers.IO) { action() }
                 workMessage(R.string.operation_loading_library)
-                withContext(Dispatchers.IO) { repository!!.releaseWorkingCopies { notebookStorage?.releaseWorkingCopies() } }
                 refreshList()
             } catch (e: Exception) { fail(e) }
         }
@@ -882,6 +850,8 @@ class EditorViewModel : ViewModel() {
         updatePreferences(mutablePreferences.value.value.copy(pressureCurve = curve))
         brush = createBrush(mutableUi.value); fixedWidthBrush = createBrush(mutableUi.value, pressure = false)
     }
+    internal fun drawShapes(enabled: Boolean) = updatePreferences(mutablePreferences.value.value.copy(drawShapes = enabled))
+    internal fun snapShapes(enabled: Boolean) = updatePreferences(mutablePreferences.value.value.copy(snapShapes = enabled))
     internal fun toolOrder(order: List<EditorTool>) = updatePreferences(mutablePreferences.value.value.copy(toolOrder = order))
     internal fun notePaper(paper: NotePaper) {
         val info = mutableWorkspace.value.current ?: return
@@ -1140,8 +1110,7 @@ class EditorViewModel : ViewModel() {
     }
     private fun requestVisibleRegion() {
         val base = lazyBase ?: return
-        // Loading marks the editor busy. Starting it between finger samples would
-        // cancel the pan/pinch and restore the gesture's original viewport.
+        // Load the final viewport rather than cancel/restart IO for every sample.
         if (restoring || closing || hydratingAll || viewportGestureActive) return
         val top = (viewport.position.top - 500f).coerceAtLeast(0f)
         val bottom = viewport.bottom + 500f
@@ -1150,8 +1119,10 @@ class EditorViewModel : ViewModel() {
         stopBackgroundLoading()
         val run = ++regionRun
         regionJob?.cancel()
-        regionLoading = true; regionFailed = false
-        mutableUi.value = mutableUi.value.copy(loadingRegion = true, busy = true, canUndo = false, canRedo = false)
+        // A viewport change usually stays in already loaded content. Checking the
+        // repository must not disable tools/input while waiting for its IO lock.
+        regionLoading = false; regionFailed = false
+        publish()
         regionJob = viewModelScope.launch {
             try {
                 do {
@@ -1159,16 +1130,23 @@ class EditorViewModel : ViewModel() {
                     val loaded = hydrated.toSet()
                     val needed = withContext(Dispatchers.IO) { repository!!.regionPending(base.info.id, requestedTop, requestedBottom, loaded) }
                     if (needed) {
+                        if (lazyBase !== base || closing) return@launch
                         regionLoading = true; publish()
                         val entries = withContext(Dispatchers.IO) {
                             val context = currentCoroutineContext()
                             repository!!.loadRegion(base.info.id, requestedTop, requestedBottom, loaded) { context.ensureActive() }
                         }
-                        while (edits.busy) kotlinx.coroutines.delay(16)
-                        if (lazyBase !== base || closing) return@launch
-                        val added = entries.filter { it.id !in hydrated }
-                        hydrated.addAll(added.map { it.id }); hydrateRead(added)
-                        if (base.strokes.size == hydrated.size) lazyBase = null
+                        for (batch in entries.chunked(32)) {
+                            // Reading never locks the editor. Defer only publishing
+                            // incoming content so an active contact keeps its targets.
+                            while (edits.busy || viewportGestureActive || selectionWorking || selectionGesture || insertingSpace)
+                                kotlinx.coroutines.delay(16)
+                            if (lazyBase !== base || closing) return@launch
+                            val added = batch.filter { it.id !in hydrated }
+                            hydrated.addAll(added.map { it.id }); hydrateRead(added)
+                            if (base.strokes.size == hydrated.size) lazyBase = null
+                            kotlinx.coroutines.yield()
+                        }
                     }
                 } while (requestedTop != regionTop || requestedBottom != regionBottom)
             } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -1195,7 +1173,8 @@ class EditorViewModel : ViewModel() {
                 }
                 check(entries.isNotEmpty()) { "Referenced notebook content is missing" }
                 for (batch in entries.chunked(128)) {
-                    while (edits.busy) kotlinx.coroutines.delay(16)
+                    while (edits.busy || viewportGestureActive || selectionWorking || selectionGesture || insertingSpace)
+                        kotlinx.coroutines.delay(16)
                     check(lazyBase === base && !closing) { AppMessages.text(R.string.wait_note) }
                     val added = batch.filter { it.id !in hydrated }
                     hydrated.addAll(added.map { it.id }); hydrateRead(added)
@@ -1305,9 +1284,11 @@ class EditorViewModel : ViewModel() {
             loadingRegion = regionLoading,
             loadingRest = backgroundLoading,
             partialContent = lazyBase != null,
-            busy = edits.busy || selectionWorking || selectionGesture || regionLoading || regionFailed,
-            canUndo = edits.canUndo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
-            canRedo = edits.canRedo && !selectionWorking && !selectionGesture && !regionLoading && !regionFailed,
+            // IO progress/errors are separate from document operations. A slow or
+            // failed read must never disable navigation, tools or new handwriting.
+            busy = edits.busy || selectionWorking || selectionGesture,
+            canUndo = edits.canUndo && !selectionWorking && !selectionGesture,
+            canRedo = edits.canRedo && !selectionWorking && !selectionGesture,
             selectionCount = selection.size,
         )
         updateViewportOverlay()

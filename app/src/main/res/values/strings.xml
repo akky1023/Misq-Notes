@@ -1,18 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="storage_migrate_format3">新しい保存形式へ移行</string>
     <string name="export_notebook_file">ノートファイルを書き出す（.misq）</string>
     <string name="storage_settings_conflict">フォルダー・用紙・ペン設定の変更が競合しています。両方の保存版を保持しています。使用する設定を選択してください。</string>
     <string name="storage_use_local_settings">この端末の設定を使用</string>
     <string name="storage_use_other_settings">別の保存版 %1$s の設定を使用</string>
     <string name="storage_settings_version_summary">フォルダー %1$s 個、ノートの所属 %2$s 件</string>
-    <string name="storage_migrate_format3_help">ノートを閉じてから移行できます。旧データと復元用コピーを残し、新しい形式の読み戻しを検証して切り替えます。共有している端末はすべて新しい形式に対応した版を使用してください。</string>
-    <string name="storage_migrating">復元用コピーと新しい保存形式を検証中</string>
     <string name="storage_format3_enabled">新しい保存形式を使用中。旧データと移行時の復元用コピーを保持しています。</string>
     <string name="loading_note">ノートを読み込み中</string>
     <string name="loading_region">表示範囲を読み込み中</string>
     <string name="storage_conflict">保存先にも変更があります。両方の内容を保持しています。別の空の保存先を選ぶと、端末内の内容を保存できます。</string>
-    <string name="storage_incoming">保存先の更新を取得しました。アプリを開き直すと反映されます。</string>
     <string name="lasso_free">自由</string>
     <string name="lasso_rectangle">矩形</string>
     <string name="insert_space">余白を挿入</string>
@@ -182,13 +178,6 @@
     <string name="delete_curve_point" formatted="false">"選択した通過点を削除"</string>
     <string name="theme_light" formatted="false">"ライト"</string>
     <string name="theme_dark" formatted="false">"ダーク"</string>
-    <string name="storage_name_conflict">"保存用フォルダ「%1$s」と同名のファイルがあります"</string>
-    <string name="storage_create_failed" formatted="false">"保存用フォルダを作成できません"</string>
-    <string name="storage_file_too_large" formatted="false">"保存ファイルが大きすぎます"</string>
-    <string name="storage_file_read_failed" formatted="false">"保存ファイルを読み込めません"</string>
-    <string name="storage_data_invalid" formatted="false">"保存データを確認できません"</string>
-    <string name="storage_write_unverified" formatted="false">"保存先への書き込みを確認できません"</string>
-    <string name="storage_organize_failed" formatted="false">"保存ファイルを整理できません"</string>
     <string name="sort_name_asc" formatted="false">"名前（昇順）"</string>
     <string name="sort_name_desc" formatted="false">"名前（降順）"</string>
     <string name="sort_created_asc" formatted="false">"作成日（昇順）"</string>
@@ -200,19 +189,9 @@
     <string name="sort_created" formatted="false">"作成日"</string>
     <string name="sort_updated" formatted="false">"更新日"</string>
     <string name="folder_not_empty" formatted="false">"空のフォルダのみ削除できます"</string>
-    <string name="storage_read_retained" formatted="false">"保存先のデータを読み込めません。アプリ内のデータを保持しています。"</string>
-    <string name="storage_corrupt" formatted="false">"保存先のデータが破損しています"</string>
-    <string name="storage_commit_failed" formatted="false">"保存先の確定に失敗しました"</string>
     <string name="storage_selected" formatted="false">"指定したフォルダ"</string>
-    <string name="storage_restore_failed" formatted="false">"保存先変更前のノートを復元できません"</string>
-    <string name="storage_unavailable" formatted="false">"保存先に接続できません"</string>
-    <string name="storage_different_data" formatted="false">"この保存先には異なるデータがあります。現在のノート・フォルダを上書きしないよう、空の保存先を選んでください。"</string>
-    <string name="storage_choice_save_failed" formatted="false">"保存先の設定を保存できません"</string>
-    <string name="storage_unreadable_notes" formatted="false">"保存先に読み込めないノートがあります"</string>
-    <string name="storage_change_incomplete" formatted="false">"前回の保存先変更を完了できませんでした。アプリ内のデータを保持しています。"</string>
     <string name="unreadable_note" formatted="false">"読み込めないノート"</string>
     <string name="note_data_read_failed" formatted="false">"保存データを読み込めません"</string>
-    <string name="note_format_invalid" formatted="false">"ノートの形式が正しくありません"</string>
     <string name="save_unsuccessful" formatted="false">"保存できませんでした"</string>
     <string name="storage_select_failed">"保存先を指定できません：%1$s"</string>
     <string name="storage_location" formatted="false">"ノートの保存先"</string>
@@ -301,6 +280,8 @@
     <string name="operation_loading_library">ノート一覧を読み込み中</string>
     <string name="operation_loading_settings">設定を読み込み中</string>
     <string name="operation_preparing_note">ノートを表示する準備中</string>
-    <string name="operation_syncing">外部保存先へ反映中</string>
     <string name="operation_changing_storage">保存先を切り替え中</string>
+    <string name="draw_shapes">図形の描画</string>
+    <string name="snap_shapes">スナップ機能の有効化</string>
+    <string name="storage_legacy_unsupported">旧形式の保存先は直接使用できません。元データは変更していません。</string>
 </resources>

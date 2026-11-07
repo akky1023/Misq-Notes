@@ -23,7 +23,7 @@ class NotebookCompactionCopyTest {
         var totalBefore = 0L
         var totalAfter = 0L
         originals.forEach { original ->
-            val beforeHash = NotebookArchive.digest(original)
+            val beforeHash = ContentHash.digest(original)
             val before = MisqFile(original).indexes()
             val target = original.copyTo(File(output, original.name))
             val document = MisqFile(target)
@@ -38,7 +38,7 @@ class NotebookCompactionCopyTest {
                 }
                 assertEquals(old.thumbnail?.hash, current.thumbnail?.hash)
             }
-            assertEquals(beforeHash, NotebookArchive.digest(original))
+            assertEquals(beforeHash, ContentHash.digest(original))
             assertTrue(target.length() <= original.length())
             totalBefore += original.length(); totalAfter += target.length()
             println("COMPACTION ${original.name} ${original.length()} -> ${target.length()}")

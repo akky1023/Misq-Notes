@@ -21,23 +21,6 @@ class NotebookPresetsTest {
             pressureCurve = PressureCurve(10, 120), buttonActions = List(3) { PenButtonAction.TEMPORARY_LASSO })
         assertEquals(local.copy(widths = source.widths, highlighterWidths = source.highlighterWidths, eraserWidths = source.eraserWidths), restored.applyTo(local))
     }
-    @Test fun presetsAreIncludedInACommittedArchiveAndRestoredWithTheirIntegrityCheck() {
-        val blobs = mutableMapOf<String, ByteArray>()
-        val directory = object : ArchiveDirectory {
-            override fun names() = blobs.keys.toSet()
-            override fun read(name: String) = blobs.getValue(name)
-            override fun write(name: String, bytes: ByteArray) { blobs[name] = bytes }
-            override fun delete(name: String) { blobs.remove(name) }
-        }
-        val root = temp.newFolder()
-        val folders = File(root, "folders.hwp"); NotebookFolders.write(folders, LibraryPreferences())
-        val presets = File(root, "presets.hwp"); NotebookPresets.write(presets, NotePaper(pattern = PaperPattern.GRID), SavedPalettes(), ToolPreferences())
-        val archive = NotebookArchive(directory)
-        archive.commit(mapOf("folders.hwp" to folders, "presets.hwp" to presets))
-        val target = temp.newFolder(); archive.restore(archive.latest()!!, target)
-        assertEquals(NotebookPresets.read(presets), NotebookPresets.read(File(target, "presets.hwp")))
-    }
-
     @Test fun versionOnePresetsKeepTheOriginalPaperAndUseDefaultMargin() {
         val file = temp.newFile()
         val paper = NotePaper(pattern = PaperPattern.RULED, lineWidth = 3f)

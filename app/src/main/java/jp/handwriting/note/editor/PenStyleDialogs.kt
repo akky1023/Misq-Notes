@@ -5,20 +5,11 @@ import jp.handwriting.note.R
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -26,18 +17,14 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.*
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import jp.handwriting.note.withScrollBar
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.PI
@@ -47,7 +34,7 @@ import jp.handwriting.note.LocalNotebookDark
 internal fun PenDetailsDialog(
     ui: EditorUi, preferences: ToolPreferencesUi,
     onSize: (Int) -> Unit, onTransparency: (Int) -> Unit,
-    onRetry: () -> Unit, onColor: () -> Unit, onDismiss: () -> Unit,
+    onRetry: () -> Unit, onDrawShapes: (Boolean) -> Unit, onSnapShapes: (Boolean) -> Unit, onColor: () -> Unit, onDismiss: () -> Unit,
 ) {
     EditorPopover(
         onDismiss = onDismiss,
@@ -66,6 +53,18 @@ internal fun PenDetailsDialog(
                 SliderNumber(AppMessages.text(R.string.width), ui.size.toInt(), 1..50, "", !ui.busy, onSize, ui.color)
                 if (ui.tool != EditorTool.ERASER) {
                 SliderNumber(AppMessages.text(R.string.opacity), PenStyle.transparency(ui.color), 0..100, "%", !ui.busy, onTransparency, ui.color)
+                }
+                if (ui.tool == EditorTool.PEN || ui.tool == EditorTool.HIGHLIGHTER) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(AppMessages.text(R.string.draw_shapes), Modifier.weight(1f))
+                        Switch(preferences.value.drawShapes, onDrawShapes, enabled = !ui.busy)
+                    }
+                    if (preferences.value.drawShapes) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(AppMessages.text(R.string.snap_shapes), Modifier.weight(1f))
+                            Switch(preferences.value.snapShapes, onSnapShapes, enabled = !ui.busy)
+                        }
+                    }
                 }
                 preferences.error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
@@ -109,25 +108,6 @@ internal fun WidthPreset(slot: Int, width: Int, active: Boolean, enabled: Boolea
             }
         }
     }
-}
-
-@Composable
-private fun IntegerInput(
-    label: String, value: String, range: IntRange, enabled: Boolean, onValue: (String) -> Unit,
-    modifier: Modifier = Modifier, suffix: String = "", onDone: () -> Unit = {},
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { text -> if (text.length <= 3 && text.all { it in '0'..'9' }) onValue(text) },
-        modifier = modifier,
-        enabled = enabled, singleLine = true,
-        label = { Text(label) },
-        suffix = if (suffix.isEmpty()) null else ({ Text(suffix) }),
-        isError = value.toIntOrNull() !in range,
-        supportingText = { Text("${range.first}–${range.last}") },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { onDone() }),
-    )
 }
 
 @Composable

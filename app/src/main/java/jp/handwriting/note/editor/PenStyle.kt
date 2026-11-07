@@ -6,10 +6,6 @@ import kotlin.math.pow
 internal object PenStyle {
     fun rgb(color: Int): Int = color and 0x00FFFFFF
     fun withRgb(color: Int, rgbValue: Int): Int = (color and 0xFF000000.toInt()) or rgb(rgbValue)
-    fun fromRgb(red: Int, green: Int, blue: Int): Int {
-        require(red in 0..255 && green in 0..255 && blue in 0..255)
-        return (red shl 16) or (green shl 8) or blue
-    }
     fun transparency(color: Int): Int = ((255 - (color ushr 24)) * 100f / 255).roundToInt()
     fun withTransparency(color: Int, percent: Int): Int {
         require(percent in 0..100)

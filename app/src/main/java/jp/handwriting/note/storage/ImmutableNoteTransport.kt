@@ -10,8 +10,27 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
     private val sealed = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val checked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val acknowledged = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val snapshotDepth = ThreadLocal<Int>()
     init { store.fetch = ::openLogical }
+
+    /** One synchronous sync pass reuses its checked inventory; later passes see new writers. */
+    fun <T> withInventorySnapshot(block: () -> T): T {
+        val depth = snapshotDepth.get() ?: 0
+        if (depth == 0) refresh()
+        snapshotDepth.set(depth + 1)
+        try { return block() }
+        finally {
+            if (depth == 0) snapshotDepth.remove() else snapshotDepth.set(depth)
+        }
+    }
+    @Synchronized private fun remember(vararg names: String) { inventory = inventory + names }
+    @Synchronized private fun rememberObject(id: String, name: String, seal: String) {
+        inventory = inventory + name + seal
+        sealed[id] = name
+        checked += seal
+    }
     @Synchronized private fun refresh() {
+        if ((snapshotDepth.get() ?: 0) > 0) return
         inventory = remote.names()
         sealed.entries.removeAll { (_, name) -> name !in inventory || "seal-${name.removePrefix("object-")}" !in inventory }
         inventory.filter { it.matches(SEAL) && it !in checked }.forEach { name ->
@@ -39,13 +58,14 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
             check(remote.digest(name) == id.removePrefix("o-")) { "External object verification failed" }
             val seal = "seal-$suffix"; val bytes = id.removePrefix("o-").toByteArray(Charsets.US_ASCII)
             remote.write(seal, bytes); check(remote.read(seal).contentEquals(bytes))
-            sealed[id] = name; checked += seal
+            rememberObject(id, name, seal)
         }
         val prefix = "commit-${root.info.id}-${root.id.removePrefix("o-")}-"
         val bytes = store.objectBytes(root.id)
         if (inventory.none { it.startsWith(prefix) && runCatching { remote.read(it).contentEquals(bytes) }.getOrDefault(false) }) {
             val name = prefix + UUID.randomUUID()
             remote.write(name, bytes); check(remote.read(name).contentEquals(bytes)) { "External commit verification failed" }
+            remember(name)
         }
         acknowledged += closure
     }
@@ -73,7 +93,7 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
         val names = inventory.filter { it.matches(COMMIT) && it.substring(7, 43) == noteId }
         // Torn advertisements were never committed. Valid advertisements with missing
         // dependencies cause an error, preserving the previously installed healthy state.
-        val complete = names.filter { name -> runCatching { NotebookArchive.digest(remote.read(name)) == name.substring(44, 108) }.getOrDefault(false) }
+        val complete = names.filter { name -> runCatching { ContentHash.digest(remote.read(name)) == name.substring(44, 108) }.getOrDefault(false) }
         val records = complete.groupBy { it.substring(44, 108) }.mapValues { it.value.first() }
         val roots = records.map { (hash, name) ->
             val id = "o-$hash"; remote.openRead(name).use { store.importObject(id, it) }; store.root(id)

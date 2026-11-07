@@ -11,10 +11,10 @@ class ProbeExportTest {
             buttonState = 32, actionButton = 32, pointers = listOf(p),
             history = listOf(HistoricalSample(99, listOf(p.copy(pressure = Float.NaN)))))
         val json = JSONObject(ProbeExport.encode(ProbeSnapshot(listOf(event), total = 4, dropped = 3),
-            JSONObject().put("name", "ペン\n\"test\"")))
+            JSONObject().put("name", "繝壹Φ\n\"test\"")))
         assertEquals(1, json.getInt("formatVersion"))
         assertEquals(3L, json.getLong("droppedEvents"))
-        assertEquals("ペン\n\"test\"", json.getJSONObject("metadata").getString("name"))
+        assertEquals("繝壹Φ\n\"test\"", json.getJSONObject("metadata").getString("name"))
         val record = json.getJSONArray("events").getJSONObject(0)
         assertEquals(32, record.getInt("buttonState"))
         assertEquals(7, record.getJSONArray("pointers").getJSONObject(0).getInt("id"))

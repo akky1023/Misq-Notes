@@ -26,22 +26,21 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
     internal data class Index(val generation: Long, val manifest: NoteManifest, val records: Map<String, Record>,
         val events: List<Event>, val entities: Map<Long, String>, val thumbnail: Record? = null, val thumbnailKey: String? = null,
         val previousManifest: NoteManifest? = null, val placements: Map<String, StrokePlacement> = emptyMap())
-    private val codec get() = NoteFiles(file.parentFile!!, false)
-    private fun key(note: NoteManifest) = NotebookArchive.digest((note.info.paper.color.toString() + ":" +
+    private fun key(note: NoteManifest) = ContentHash.digest((note.info.paper.color.toString() + ":" +
         note.strokes.joinToString { it.storageId }).toByteArray())
 
     private fun record(input: RandomAccessFile, record: Record): ByteArray {
-        require(record.offset >= LEGACY_HEADER && record.size in 0..MAX_RECORD && record.offset <= input.length() - record.size)
+        require(record.offset >= HEADER && record.size in 0..MAX_RECORD && record.offset <= input.length() - record.size)
         input.seek(record.offset)
-        return ByteArray(record.size).also { input.readFully(it); require(NotebookArchive.digest(it) == record.hash) }
+        return ByteArray(record.size).also { input.readFully(it); require(ContentHash.digest(it) == record.hash) }
     }
     private fun slots(input: RandomAccessFile): List<Slot> {
-        input.seek(0); val magic = input.readLong(); require(magic == MAGIC || magic == LEGACY_MAGIC)
-        val size = if (magic == LEGACY_MAGIC) LEGACY_SLOT else SLOT
+        input.seek(0); val magic = input.readLong(); require(magic == MAGIC)
+        val size = SLOT
         return (0..1).mapNotNull { position -> runCatching {
             input.seek(8L + position * size)
             val bytes = ByteArray(size).also(input::readFully)
-            if (magic == MAGIC) require(MessageDigest.getInstance("SHA-256").digest(bytes.copyOf(size - 32)).contentEquals(bytes.takeLast(32).toByteArray()))
+            require(MessageDigest.getInstance("SHA-256").digest(bytes.copyOf(size - 32)).contentEquals(bytes.takeLast(32).toByteArray()))
             val data = ByteBuffer.wrap(bytes)
             val generation = data.long; require(generation > 0)
             fun ref(): Record? {
@@ -50,7 +49,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
                 return Record(offset, length, digest.joinToString("") { "%02x".format(it) })
             }
             val index = checkNotNull(ref())
-            Slot(generation, index, if (magic == MAGIC) ref() else null, if (magic == MAGIC) ref() else null)
+            Slot(generation, index, ref(), ref())
         }.getOrNull() }.sortedByDescending { it.generation }
     }
     internal fun indexes(): List<Index> = readIndexes(all = true)
@@ -59,7 +58,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         if (cachedStamp == stamp && (!all || cachedAllIndexes)) cachedIndexes?.let { return it }
         try {
             return RandomAccessFile(file, "r").use { input ->
-                require(input.length() >= LEGACY_HEADER)
+                require(input.length() >= HEADER)
                 val parsed = slots(input).asSequence().mapNotNull { slot -> runCatching {
                     val body = record(input, slot.index)
                     val parsed = decode(JSONObject(String(body, Charsets.UTF_8)))
@@ -78,7 +77,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         val content = manifest.copy(info = manifest.info.copy(updatedAt = 0,
             position = jp.handwriting.note.editor.ViewPosition(), color = 0xFF202B33.toInt(), size = 3f))
         val digest = MessageDigest.getInstance("SHA-256")
-        digest.update(codec.encodeManifest(content))
+        digest.update(NoteManifestCodec.encodeManifest(content))
         manifest.strokes.forEach { digest.update(index.records.getValue(it.storageId).hash.toByteArray(Charsets.US_ASCII)) }
         return manifest.info.id + ":" + digest.digest().joinToString("") { "%02x".format(it) }
     }
@@ -86,7 +85,8 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         val index = index()
         // A higher committed slot with a damaged body means the previous generation was recovered.
         val newest = RandomAccessFile(file, "r").use { input ->
-            val size = if (input.readLong() == LEGACY_MAGIC) LEGACY_SLOT else SLOT
+            require(input.readLong() == MAGIC)
+            val size = SLOT
             (0..1).maxOf { input.seek(8L + it * size); input.readLong() }
         }
         return ReadManifest(index.manifest, newest > index.generation)
@@ -125,7 +125,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
                 } else {
                     val json = JSONObject(String(record(input, slot.summary), Charsets.UTF_8))
                     val id = json.getString("id")
-                    val manifest = codec.decodeManifest(id, Base64.getDecoder().decode(json.getString("manifest")))
+                    val manifest = NoteManifestCodec.decodeManifest(id, Base64.getDecoder().decode(json.getString("manifest")))
                     require(readOnlyAlias || id == file.name.substringBefore('.'))
                     NoteSummary(id, manifest.info.title, manifest.info.updatedAt, json.getInt("strokes"),
                         createdAt = manifest.info.createdAt, paper = manifest.info.paper)
@@ -135,19 +135,17 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         }
         throw IOException("Invalid Misq summary")
     }
-    internal fun externalIdentity(): Pair<String, String> = summary().id to
-        RandomAccessFile(file, "r").use { slots(it).first().index.hash }
     private fun append(output: RandomAccessFile, bytes: ByteArray): Record {
         require(bytes.size <= MAX_RECORD)
         val offset = output.length().coerceAtLeast(HEADER.toLong())
         output.seek(offset); output.write(bytes)
-        return Record(offset, bytes.size, NotebookArchive.digest(bytes))
+        return Record(offset, bytes.size, ContentHash.digest(bytes))
     }
     private fun commit(output: RandomAccessFile, index: Index) {
         val body = encode(index).toString().toByteArray(Charsets.UTF_8)
         val ref = append(output, body)
         val summary = JSONObject().put("id", index.manifest.info.id).put("strokes", index.manifest.strokes.size)
-            .put("manifest", Base64.getEncoder().encodeToString(codec.encodeManifest(index.manifest.copy(strokes = emptyList(), nextId = 1))))
+            .put("manifest", Base64.getEncoder().encodeToString(NoteManifestCodec.encodeManifest(index.manifest.copy(strokes = emptyList(), nextId = 1))))
         val summaryRef = append(output, summary.toString().toByteArray())
         output.fd.sync()
         val slot = index.generation % 2
@@ -180,14 +178,13 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
     }
     fun save(note: NoteManifest, placements: Map<String, StrokePlacement> = emptyMap(), encode: (String) -> ByteArray) {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
-        upgradeLegacy()
         if (file.exists() && file.length() > 0) {
             if (file.length() < HEADER || RandomAccessFile(file, "r").use { it.readLong() != MAGIC })
                 throw IOException("Invalid Misq header; original data retained")
         }
         require(note.nextId > (note.strokes.maxOfOrNull { it.id } ?: 0) && note.strokes.map { it.id }.distinct().size == note.strokes.size)
         // Validate through the same parser used when reopening.
-        codec.decodeManifest(note.info.id, codec.encodeManifest(note))
+        NoteManifestCodec.decodeManifest(note.info.id, NoteManifestCodec.encodeManifest(note))
         val previous = if (file.exists() && file.length() >= HEADER) runCatching { index() }.getOrElse {
             // A file containing a damaged commit must never be replaced with an empty note.
             val committed = RandomAccessFile(file, "r").use { input -> (0..1).any { input.seek(8L + it * SLOT); input.readLong() != 0L } }
@@ -225,10 +222,9 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
     /** Resolve every imported head, including rejected additions, so later sync cannot resurrect them. */
     internal fun resolve(note: NoteManifest, sources: List<MisqFile>, selectedEntities: Map<Long, String>) {
         check(!readOnlyAlias)
-        upgradeLegacy()
         val previous = index()
         require(note.info.id == previous.manifest.info.id)
-        codec.decodeManifest(note.info.id, codec.encodeManifest(note))
+        NoteManifestCodec.decodeManifest(note.info.id, NoteManifestCodec.encodeManifest(note))
         val indexes = sources.map { it.index() }
         val combined = linkedMapOf<String, Event>()
         indexes.flatMap { it.events }.forEach { event ->
@@ -262,7 +258,6 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
     }
     fun saveThumbnail(png: ByteArray) {
         check(!readOnlyAlias) { "Alias readers cannot modify a note" }
-        upgradeLegacy()
         val index = index()
         open().use { output -> commit(output, index.copy(generation = index.generation + 1,
             thumbnail = append(output, png), thumbnailKey = key(index.manifest))) }
@@ -278,9 +273,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
                 if (event.version in heads) event.copy(at = times[event.entity] ?: event.at) else event
             })) }
     }
-    private fun upgradeLegacy() {
-        if (file.exists() && file.length() >= 8 && RandomAccessFile(file, "r").use { it.readLong() == LEGACY_MAGIC }) rewrite(index())
-    }
+
     fun validate(checkpoint: () -> Unit = {}) {
         val index = index()
         RandomAccessFile(file, "r").use { input ->
@@ -353,7 +346,7 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         } finally { temporary.delete() }
     }
     private fun encode(index: Index): JSONObject = JSONObject().put("format", 1).put("generation", index.generation)
-        .put("id", index.manifest.info.id).put("manifest", Base64.getEncoder().encodeToString(codec.encodeManifest(index.manifest)))
+        .put("id", index.manifest.info.id).put("manifest", Base64.getEncoder().encodeToString(NoteManifestCodec.encodeManifest(index.manifest)))
         .put("records", JSONObject().also { obj -> index.records.forEach { (id, ref) -> obj.put(id, recordJson(ref)) } })
         .put("events", JSONArray().also { array -> index.events.forEach { event -> array.put(JSONObject()
             .put("version", event.version).put("entity", event.entity).put("parents", JSONArray(event.parents))
@@ -361,18 +354,18 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         .put("entities", JSONObject().also { obj -> index.entities.forEach { (id, entity) -> obj.put(id.toString(), entity) } })
         .put("thumbnail", index.thumbnail?.let(::recordJson) ?: JSONObject.NULL)
         .put("thumbnailKey", index.thumbnailKey ?: JSONObject.NULL)
-        .put("previousManifest", index.previousManifest?.let { Base64.getEncoder().encodeToString(codec.encodeManifest(it)) } ?: JSONObject.NULL)
+        .put("previousManifest", index.previousManifest?.let { Base64.getEncoder().encodeToString(NoteManifestCodec.encodeManifest(it)) } ?: JSONObject.NULL)
         .put("placements", JSONObject().also { values -> index.placements.forEach { (id, p) ->
             values.put(id, JSONArray().put(p.startY).put(p.top).put(p.bottom))
         } })
     private fun recordJson(ref: Record) = JSONObject().put("offset", ref.offset).put("size", ref.size).put("sha256", ref.hash)
     private fun recordJson(obj: JSONObject) = Record(obj.getLong("offset"), obj.getInt("size"), obj.getString("sha256")).also {
-        require(it.offset >= LEGACY_HEADER && it.size in 0..MAX_RECORD && it.hash.matches(Regex("[a-f0-9]{64}")))
+        require(it.offset >= HEADER && it.size in 0..MAX_RECORD && it.hash.matches(Regex("[a-f0-9]{64}")))
     }
     private fun decode(obj: JSONObject): Index {
         require(obj.getInt("format") == 1)
         fun uuid(value: String) = value.also { require(UUID.fromString(it).toString() == it) }
-        val note = codec.decodeManifest(uuid(obj.getString("id")), Base64.getDecoder().decode(obj.getString("manifest")))
+        val note = NoteManifestCodec.decodeManifest(uuid(obj.getString("id")), Base64.getDecoder().decode(obj.getString("manifest")))
         require(readOnlyAlias || file.name.substringBefore('.') == note.info.id || file.name.endsWith(".compact") || file.name.endsWith(".tmp"))
         val records = obj.getJSONObject("records").let { value -> value.keys().asSequence().associate { uuid(it) to recordJson(value.getJSONObject(it)) } }
         val events = obj.getJSONArray("events").let { value -> List(value.length()) { i ->
@@ -392,16 +385,13 @@ internal class MisqFile(val file: File, private val readOnlyAlias: Boolean = fal
         return Index(obj.getLong("generation"), note, records, events, entities,
             if (obj.isNull("thumbnail")) null else recordJson(obj.getJSONObject("thumbnail")),
             if (obj.isNull("thumbnailKey")) null else obj.getString("thumbnailKey"),
-            if (obj.isNull("previousManifest")) null else codec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))),
+            if (obj.isNull("previousManifest")) null else NoteManifestCodec.decodeManifest(note.info.id, Base64.getDecoder().decode(obj.getString("previousManifest"))),
             obj.optJSONObject("placements")?.let { values -> values.keys().asSequence().associate { id ->
                 val value = values.getJSONArray(id)
                 uuid(id) to StrokePlacement(value.getDouble(0).toFloat(), value.getDouble(1).toFloat(), value.getDouble(2).toFloat())
             } }.orEmpty())
     }
     companion object {
-        private const val LEGACY_MAGIC = 0x4D49535130303031L
-        private const val LEGACY_SLOT = 64
-        private const val LEGACY_HEADER = 8 + LEGACY_SLOT * 2
         private const val MAGIC = 0x4D49535130303032L // MISQ0002
         private const val SLOT = 192
         private const val HEADER = 8 + SLOT * 2

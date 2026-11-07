@@ -9,7 +9,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.handwriting.note.editor.EditorViewModel
@@ -44,11 +43,6 @@ internal fun StorageSettings(model: EditorViewModel) {
                 Text(if (version.local) AppMessages.text(R.string.storage_use_local_settings) else AppMessages.text(R.string.storage_use_other_settings, index + 1))
             }
         }
-    } else {
-        TextButton(enabled = !workspace.working && workspace.current == null, onClick = model::migrateStorageFormat) {
-            Text(AppMessages.text(R.string.storage_migrate_format3))
-        }
-        Text(AppMessages.text(R.string.storage_migrate_format3_help), style = MaterialTheme.typography.bodySmall)
     }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
 }

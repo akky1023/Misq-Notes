@@ -1,18 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="storage_migrate_format3">Migrate to the new storage format</string>
     <string name="export_notebook_file">Export notebook file (.misq)</string>
     <string name="storage_settings_conflict">Folder, paper or pen settings conflict. Both versions have been retained. Choose the settings to use.</string>
     <string name="storage_use_local_settings">Use settings from this device</string>
     <string name="storage_use_other_settings">Use settings from saved version %1$s</string>
     <string name="storage_settings_version_summary">%1$s folders, %2$s notebook locations</string>
-    <string name="storage_migrate_format3_help">Close the notebook before migrating. Original data and an independent rollback copy are retained. The new format is read back and verified before switching. All devices sharing this library must use a version that supports the new format.</string>
-    <string name="storage_migrating">Verifying the rollback copy and new storage format</string>
     <string name="storage_format3_enabled">Using the new storage format. Original data and the migration rollback copy are retained.</string>
     <string name="loading_note">Loading note</string>
     <string name="loading_region">Loading this area</string>
     <string name="storage_conflict">The storage location also has changes. Both versions are preserved. Choose another empty location to save the version on this device.</string>
-    <string name="storage_incoming">Updates were downloaded. Reopen the app to apply them.</string>
     <string name="lasso_free">Free</string>
     <string name="lasso_rectangle">Rectangle</string>
     <string name="insert_space">Insert space</string>
@@ -182,13 +178,6 @@
     <string name="delete_curve_point" formatted="false">"Delete selected curve point"</string>
     <string name="theme_light" formatted="false">"Light"</string>
     <string name="theme_dark" formatted="false">"Dark"</string>
-    <string name="storage_name_conflict">"A file named “%1$s” is blocking the storage folder"</string>
-    <string name="storage_create_failed" formatted="false">"Could not create the storage folder"</string>
-    <string name="storage_file_too_large" formatted="false">"The saved file is too large"</string>
-    <string name="storage_file_read_failed" formatted="false">"Could not read the saved file"</string>
-    <string name="storage_data_invalid" formatted="false">"Could not verify the saved data"</string>
-    <string name="storage_write_unverified" formatted="false">"Could not verify the write to the storage folder"</string>
-    <string name="storage_organize_failed" formatted="false">"Could not organize the saved files"</string>
     <string name="sort_name_asc" formatted="false">"Name (ascending)"</string>
     <string name="sort_name_desc" formatted="false">"Name (descending)"</string>
     <string name="sort_created_asc" formatted="false">"Created (ascending)"</string>
@@ -200,19 +189,9 @@
     <string name="sort_created" formatted="false">"Created"</string>
     <string name="sort_updated" formatted="false">"Updated"</string>
     <string name="folder_not_empty" formatted="false">"Only empty folders can be deleted"</string>
-    <string name="storage_read_retained" formatted="false">"Could not read the storage folder. The copy in the app has been kept."</string>
-    <string name="storage_corrupt" formatted="false">"The data in the storage folder is damaged"</string>
-    <string name="storage_commit_failed" formatted="false">"Could not finish saving to the storage folder"</string>
     <string name="storage_selected" formatted="false">"Selected folder"</string>
-    <string name="storage_restore_failed" formatted="false">"Could not restore the notes from before the storage change"</string>
-    <string name="storage_unavailable" formatted="false">"The storage folder is unavailable"</string>
-    <string name="storage_different_data" formatted="false">"This folder contains different data. Choose an empty folder to avoid overwriting notes and folders."</string>
-    <string name="storage_choice_save_failed" formatted="false">"Could not save the storage location setting"</string>
-    <string name="storage_unreadable_notes" formatted="false">"Some notes in the storage folder could not be read"</string>
-    <string name="storage_change_incomplete" formatted="false">"The previous storage change did not finish. The copy in the app has been kept."</string>
     <string name="unreadable_note" formatted="false">"Unreadable note"</string>
     <string name="note_data_read_failed" formatted="false">"Could not read the saved data"</string>
-    <string name="note_format_invalid" formatted="false">"The note format is invalid"</string>
     <string name="save_unsuccessful" formatted="false">"Could not save"</string>
     <string name="storage_select_failed">"Could not select the storage folder: %1$s"</string>
     <string name="storage_location" formatted="false">"Note storage location"</string>
@@ -301,6 +280,8 @@
     <string name="operation_loading_library">Loading note list</string>
     <string name="operation_loading_settings">Loading settings</string>
     <string name="operation_preparing_note">Preparing note</string>
-    <string name="operation_syncing">Syncing to external storage</string>
     <string name="operation_changing_storage">Changing storage location</string>
+    <string name="draw_shapes">Draw shapes</string>
+    <string name="snap_shapes">Enable snapping</string>
+    <string name="storage_legacy_unsupported">Legacy storage cannot be opened directly. The original data has not been changed.</string>
 </resources>

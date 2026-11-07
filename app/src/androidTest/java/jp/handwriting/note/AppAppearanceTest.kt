@@ -26,7 +26,7 @@ class AppAppearanceTest {
         val automation = instrumentation.uiAutomation
         val root = File(instrumentation.targetContext.cacheDir, "appearance-${UUID.randomUUID()}")
         val paper = NotePaper()
-        NoteFiles(File(root, "notes")).create("Theme note", paper = paper)
+        NoteFiles.open(File(root, "notes")).create("Theme note", paper = paper)
         LibraryPreferencesFile(File(root, "library.hwp")).write(LibraryPreferences(theme = AppThemeMode.LIGHT))
         val store = ViewModelStore()
         lateinit var model: EditorViewModel

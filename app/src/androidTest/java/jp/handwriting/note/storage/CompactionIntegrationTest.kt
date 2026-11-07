@@ -17,7 +17,7 @@ class CompactionIntegrationTest {
         check(context.packageName == "net.neomenia.misqnotes.probe")
         val root = File(context.cacheDir, "compaction-${UUID.randomUUID()}").also { check(it.mkdirs()) }
         try {
-            val notes = NoteFiles(root)
+            val notes = MisqTestFiles(root)
             val empty = notes.create("Compaction verification")
             val ref = StrokeRef(1, UUID.randomUUID().toString())
             val written = empty.copy(strokes = listOf(ref), nextId = 2)
@@ -46,7 +46,7 @@ class CompactionIntegrationTest {
         val source = File(checkNotNull(sourcePath)).canonicalFile
         require(source.toPath().startsWith(context.cacheDir.canonicalFile.toPath()))
         require(UUID.fromString(source.nameWithoutExtension).toString() == source.nameWithoutExtension)
-        val sourceHash = NotebookArchive.digest(source)
+        val sourceHash = ContentHash.digest(source)
         val root = File(context.cacheDir, "compaction-${UUID.randomUUID()}").also { check(it.mkdirs()) }
         try {
             val target = source.copyTo(File(root, source.name))
@@ -58,7 +58,7 @@ class CompactionIntegrationTest {
             val after = MisqFile(target).indexes()
             verifyIndexes(before, after)
             assertTrue(target.length() < source.length())
-            assertEquals(sourceHash, NotebookArchive.digest(source))
+            assertEquals(sourceHash, ContentHash.digest(source))
             val refs = after.first().manifest.strokes
             assertTrue(refs.isNotEmpty())
             listOf(refs.first(), refs.last()).forEach { ref ->

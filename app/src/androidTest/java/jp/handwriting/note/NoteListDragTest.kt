@@ -29,7 +29,7 @@ class NoteListDragTest {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val automation = instrumentation.uiAutomation
         val directory = File(instrumentation.targetContext.cacheDir, "library-drag-${UUID.randomUUID()}")
-        val files = NoteFiles(File(directory, "notes"))
+        val files = NoteFiles.open(File(directory, "notes"))
         val a = files.create("Drag A"); val b = files.create("Drag B")
         val folder = UUID.randomUUID().toString()
         LibraryPreferencesFile(File(directory, "library.hwp")).write(LibraryPreferences(folders = listOf(NoteFolder(folder, "Drop target"))))
