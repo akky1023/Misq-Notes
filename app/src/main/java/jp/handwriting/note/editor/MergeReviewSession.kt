@@ -28,7 +28,6 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
         }
     }
     private val a get() = readers[0]
-    private val b get() = readers[1]
     lateinit var multiPlan: MultiMergePlan
         private set
     lateinit var plan: StrokeMergePlan
@@ -56,14 +55,6 @@ internal class MergeReviewSession private constructor(val conflicts: List<NoteCo
     }
     private fun box(value: MergeValue): StrokeIndex.Bounds? = boxes[value.key] ?: stroke(value).bounds?.let {
         StrokeIndex.Bounds(it.xMin, it.yMin, it.xMax, it.yMax).also { box -> boxes[value.key] = box }
-    }
-    fun sideValues(side: MergeChoice): List<MergeValue> {
-        val index = if (side == MergeChoice.A) plan.a else plan.b
-        val values = plan.values.associateBy { it.key }
-        return index.manifest.strokes.map { ref ->
-            val key = index.entities.getValue(ref.id) + ":" + index.records.getValue(ref.storageId).hash
-            values.getValue(key).copy(side = side, blob = ref.storageId)
-        }
     }
     suspend fun renderStep(width: Int, height: Int, viewport: MergeViewport, source: Int?,
         strength: MergeStrength, decisions: Map<String, Set<Int>>, step: MultiMergeStep?): Bitmap {
