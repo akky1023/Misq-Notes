@@ -2,7 +2,7 @@ name: Android CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
     branches: [main, develop]
     # Release Please only updates these files. Validate again before publishing.
