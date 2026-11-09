@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/akky1023/Misq-Notes/compare/v0.6.0...v0.6.1) (2026-11-09)
+
+
+### 性能改善
+
+* 一覧表示を外部同期から分離 ([89a8f2d](https://github.com/akky1023/Misq-Notes/commit/89a8f2d02bc529b17cc995dd65292f8b0787f178))
+
 ## [0.6.0](https://github.com/akky1023/Misq-Notes/compare/v0.5.0...v0.6.0) (2026-11-07)
 
 
