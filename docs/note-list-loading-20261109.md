@@ -4,6 +4,18 @@
 
 ## 実測結果
 
+本番コピーの全12冊で、Activity起動開始から一覧の描画フレーム確定まで1,408〜1,862 msだった。
+3回とも3,000 ms以内の検証に成功した。
+
+| 本番コピーの独立した起動 | 一覧データ準備完了 | 一覧フレーム確定 |
+| --- | ---: | ---: |
+| 1 | 1,720 ms | 1,862 ms |
+| 2 | 1,311 ms | 1,414 ms |
+| 3 | 1,312 ms | 1,408 ms |
+
+本番コピーは設定も含めて独立領域へ展開し、本番の外部保存先には接続しない条件で計測した。
+起動前の展開・ハッシュ照合は計測に含めない。
+
 検証アプリに保存済みの全2冊で、起動時の一覧読み込みは変更前8,695 ms。
 変更後はActivity起動開始から一覧の描画フレーム確定まで1,319〜1,349 msだった。
 
@@ -49,8 +61,12 @@ adb shell am instrument -w -e class jp.handwriting.note.storage.NoteListStartupB
 150,837ファイルについて、作成前後の内容のハッシュとファイル一覧が変化していないことを確認済み。
 スナップショットは922,092,439 bytes、SHA-256は `7f82750bf7fbd6fe6c83e4304fb2164c3e6448171467007594c31a53ef5e9f96`。
 
-PCへの移送と検証アプリ領域への実機内コピーが自動承認レビューで拒否されたため、本番コピーによる計測は未実施。
-明示的な許可を得た後、検証アプリのexternal files内の `note-list-production-snapshot.zip` を入力にして
-`-e measureProductionSnapshot true -e maxListStartupMs 3000` で計測できる。
+ユーザーの明示的な許可を受け、実機内の検証アプリのexternal filesへ `note-list-production-snapshot.zip` としてコピーした。
+PCへ本番データは移送していない。
+上記の3回の本番コピー計測後にも、原本バックアップと入力コピーのSHA-256が上記の値と一致することを確認した。
 このテストは必要な現行ストアと設定だけを独立したディレクトリへ展開し、スナップショット内のハッシュ一覧と照合する。
 原本、入力アーカイブ、展開したノートはいずれも削除しない。
+
+```powershell
+adb shell am instrument -w -e class jp.handwriting.note.storage.NoteListStartupBenchmarkTest -e measureProductionSnapshot true -e maxListStartupMs 3000 net.neomenia.misqnotes.probe.tests/androidx.test.runner.AndroidJUnitRunner
+```
