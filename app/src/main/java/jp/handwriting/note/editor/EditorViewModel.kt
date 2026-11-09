@@ -181,6 +181,7 @@ class EditorViewModel : ViewModel() {
         mergeCache = File(cache, "merge-reviews")
         if (notebookStorage == null) {
             notebookStorage = NotebookStorage(context.applicationContext, directory, viewModelScope)
+            notebookStorage!!.onRemoteUpdate = { withContext(Dispatchers.Main) { refreshRemoteLibrary(directory) } }
             viewModelScope.launch { notebookStorage!!.syncState.collect { state ->
                 val custom = notebookStorage!!.uri != null
                 mutableWorkspace.value = mutableWorkspace.value.copy(syncing = custom && state.saving,
@@ -232,8 +233,7 @@ class EditorViewModel : ViewModel() {
         beginWork(R.string.operation_loading_library)
         viewModelScope.launch {
             try {
-                val needsRemote = withContext(Dispatchers.IO) { notebookStorage?.initialize() == true }
-                if (needsRemote) notebookStorage?.initializeRemote()
+                withContext(Dispatchers.IO) { notebookStorage?.initialize() }
                 refreshStorageLocation()
                 if (notebookStorage?.recovered == true) mutableWorkspace.value = mutableWorkspace.value.copy(recovered = true)
                 workMessage(R.string.operation_loading_settings)
@@ -254,6 +254,7 @@ class EditorViewModel : ViewModel() {
                     notebookStorage?.write { libraryFile.write(value) } ?: libraryFile.write(value)
                 } }
                 launch { librarySaves!!.state.collect { state ->
+                    settingsSavedIfIdle()
                     mutableLibrary.value = mutableLibrary.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.library_save_failed, it) } ?: mutableLibrary.value.error?.takeIf { state.latest == 0L })
                 } }
@@ -264,6 +265,7 @@ class EditorViewModel : ViewModel() {
                     notebookStorage?.write { colors.write(values) } ?: colors.write(values)
                 } }
                 launch { paletteSaves!!.state.collect { state ->
+                    settingsSavedIfIdle()
                     mutablePalette.value = mutablePalette.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.palette_save_failed, it) } ?: mutablePalette.value.error?.takeIf { state.latest == 0L })
                 } }
@@ -274,6 +276,7 @@ class EditorViewModel : ViewModel() {
                     notebookStorage?.write { preferencesFile.write(value) } ?: preferencesFile.write(value)
                 } }
                 launch { preferenceSaves!!.state.collect { state ->
+                    settingsSavedIfIdle()
                     mutablePreferences.value = mutablePreferences.value.copy(saving = state.saving,
                         error = state.error?.let { AppMessages.text(R.string.settings_save_failed, it) } ?: mutablePreferences.value.error?.takeIf { state.latest == 0L })
                 } }
@@ -306,7 +309,7 @@ class EditorViewModel : ViewModel() {
             finally { starting = false }
         }
     }
-    private suspend fun refreshList() {
+    private suspend fun refreshList(finishWork: Boolean = true) {
         val notes = withContext(Dispatchers.IO) { repository!!.list() }
         val ids = notes.map { it.id }.toSet()
         val before = mutableLibrary.value.value
@@ -315,8 +318,32 @@ class EditorViewModel : ViewModel() {
         val locations = before.locations.filterKeys(::retained)
         val orders = before.orders.mapValues { (folder, order) -> order.filter { retained(it) && locations[it].orEmpty() == folder } }
         if (locations != before.locations || orders != before.orders) updateLibrary(before.copy(locations = locations, orders = orders))
-        mutableWorkspace.value = mutableWorkspace.value.copy(notes = notes, working = false)
+        mutableWorkspace.value = mutableWorkspace.value.copy(notes = notes,
+            working = if (finishWork) false else mutableWorkspace.value.working,
+            recovered = mutableWorkspace.value.recovered || notebookStorage?.recovered == true)
         refreshConflicts()
+    }
+    private suspend fun refreshRemoteLibrary(directory: File) {
+        refreshStorageLocation()
+        if (repository == null) return
+        val revision = notebookStorage?.settingsRevision
+        if (notebookStorage?.localSettingsEdited == false) {
+            val settings = withContext(Dispatchers.IO) {
+                Triple(LibraryPreferencesFile(File(directory, "library.hwp")).read(),
+                    SavedColors(File(directory, "palette.hwp")).read(), ToolPreferencesFile(File(directory, "tools.hwp")).read())
+            }
+            // A settings gesture during IO keeps its newest in-memory value.
+            if (notebookStorage?.localSettingsEdited == false && notebookStorage?.settingsRevision == revision) {
+                mutableLibrary.value = mutableLibrary.value.copy(value = settings.first)
+                savedPalettes = settings.second; refreshPalette()
+                mutablePreferences.value = mutablePreferences.value.copy(value = settings.third)
+            }
+        }
+        refreshList(finishWork = false)
+    }
+    private fun settingsSavedIfIdle() {
+        if (listOfNotNull(librarySaves?.state?.value, paletteSaves?.state?.value, preferenceSaves?.state?.value)
+                .all { it.saved == it.latest }) notebookStorage?.settingsSaved()
     }
     internal fun refreshConflicts() {
         if (conflictScan?.isActive == true || mutableConflicts.value.opening || repository == null || mutableMergeReview.value.conflict != null) return
@@ -826,6 +853,7 @@ class EditorViewModel : ViewModel() {
         updatePalette(colors)
     }
     private fun updatePalette(colors: List<Int>) {
+        notebookStorage?.settingsEdited()
         savedPalettes = if (paletteTool == EditorTool.HIGHLIGHTER) savedPalettes.copy(highlighter = colors) else savedPalettes.copy(pen = colors)
         refreshPalette(); paletteSaves?.request(savedPalettes)
     }
@@ -889,12 +917,14 @@ class EditorViewModel : ViewModel() {
     })
     internal fun retryLibrary() { librarySaves?.request(mutableLibrary.value.value) }
     private fun updateLibrary(value: LibraryPreferences) {
+        notebookStorage?.settingsEdited()
         mutableLibrary.value = mutableLibrary.value.copy(value = value)
         librarySaves?.request(value)
     }
     internal val eraserRadius get() = mutablePreferences.value.value.eraserSize / 2f
     internal fun retryPreferences() { preferenceSaves?.request(mutablePreferences.value.value) }
     private fun updatePreferences(value: ToolPreferences) {
+        notebookStorage?.settingsEdited()
         mutablePreferences.value = mutablePreferences.value.copy(value = value)
         preferenceSaves?.request(value)
     }
