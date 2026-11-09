@@ -63,6 +63,7 @@ private class NoteDrag {
 @Composable
 internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorViewModel, folder: String?, onFolder: (String?) -> Unit, onSettings: () -> Unit) {
     val library by model.library.collectAsStateWithLifecycle()
+    val workspace by model.workspace.collectAsStateWithLifecycle()
     val data = library.value
     var create by remember { mutableStateOf<String?>(null) }
     var rename by remember { mutableStateOf<NoteSummary?>(null) }
@@ -156,6 +157,8 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
                     }
                 }
                 Text(current?.name ?: AppMessages.text(R.string.notes), Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+                if (workspace.syncing) CircularProgressIndicator(Modifier.padding(horizontal = 12.dp).size(20.dp)
+                    .semantics { contentDescription = AppMessages.text(R.string.operation_loading_library) }, strokeWidth = 2.dp)
                 Box {
                     ToolAction(AppMessages.text(R.string.sort_order, data.sortFor(folder).fieldLabel), ToolbarIcons.Sort, !working) { sortMenu = true }
                     DropdownMenu(sortMenu, { sortMenu = false }) {
