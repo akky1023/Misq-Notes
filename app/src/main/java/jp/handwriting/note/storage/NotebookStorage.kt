@@ -30,6 +30,13 @@ internal class NotebookStorage(private val context: Context, private val directo
     private val externalMode = MutableStateFlow(false)
     private val connectionState = MutableStateFlow(SaveState())
     var beforeExternalSave: suspend () -> Unit = {}
+    var onRemoteUpdate: suspend () -> Unit = {}
+    @Volatile var localSettingsEdited = false
+        private set
+    @Volatile var settingsRevision = 0L
+        private set
+    @Synchronized fun settingsEdited() { localSettingsEdited = true; settingsRevision++; version++ }
+    @Synchronized fun settingsSaved() { localSettingsEdited = false }
     private val queue = SaveQueue(scope, batchMillis = 750L) { _: Unit ->
         beforeExternalSave()
         withContext(Dispatchers.IO) { syncFormat3(incoming = false) }
@@ -63,9 +70,16 @@ internal class NotebookStorage(private val context: Context, private val directo
         externalMode.value = uri != null
         return uri != null
     }
-    suspend fun initializeRemote() = withContext(Dispatchers.IO) {
-        try { syncFormat3(incoming = true); connectionState.value = SaveState() }
-        catch (error: Exception) { connectionState.value = SaveState(error = error.localizedMessage) }
+    suspend fun initializeRemote() {
+        var failure: String? = null
+        try {
+            withContext(Dispatchers.IO) { syncFormat3(incoming = true) }
+        } catch (error: CancellationException) { throw error }
+        catch (error: Exception) { failure = error.localizedMessage }
+        try { onRemoteUpdate() }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) { failure = failure ?: error.localizedMessage }
+        connectionState.value = SaveState(error = failure)
     }
     @Synchronized fun <T> write(block: () -> T): T {
         checkNotNull(format3) { AppMessages.text(R.string.storage_legacy_unsupported) }
@@ -88,7 +102,8 @@ internal class NotebookStorage(private val context: Context, private val directo
         if (id == null && uri != null) retryPending()
     }
     @Synchronized fun startBackground() {
-        if (uri != null && pending.exists()) queue.request(Unit)
+        // Local heads are usable immediately; remote discovery must not block the list.
+        retryPending()
     }
     suspend fun awaitSync(): Boolean {
         if (uri == null) return true
@@ -180,11 +195,13 @@ internal class NotebookStorage(private val context: Context, private val directo
                 val noteIds = transport.noteIds()
                 val received = noteIds.associateWith(transport::heads)
                 for ((id, heads) in received) {
+                    // UI setting changes may still be waiting in their save queues.
+                    if (id == Format3Library.SETTINGS_ID && localSettingsEdited) continue
                     if (heads.size == 1) {
                         val next = heads.single()
                         synchronized(this) {
                             if (version == captured && store.current(id)?.id == roots.firstOrNull { it.info.id == id }?.id) {
-                                if (active != null) return@synchronized
+                                if (active != null || (id == Format3Library.SETTINGS_ID && localSettingsEdited)) return@synchronized
                                 if (id == Format3Library.SETTINGS_ID) applyFormat3Settings(checkNotNull(store.thumbnail(next)))
                                 store.install(next, validate = false)
                             }

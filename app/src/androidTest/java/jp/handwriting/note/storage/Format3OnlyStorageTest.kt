@@ -16,6 +16,74 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class Format3OnlyStorageTest {
+    private suspend fun slowRemoteStartup(editSettings: Boolean, openNote: Boolean = false) = isolated { context, folder, scope ->
+        val provider = Uri.parse("content://net.neomenia.misqnotes.probe.tests.working-set")
+        fun control(method: String, hold: Boolean = false) = context.contentResolver.call(provider, method, null,
+            android.os.Bundle().apply { putBoolean("hold", hold) })
+        @Suppress("DEPRECATION")
+        val tree = control("test-new-tree")!!.getParcelable<Uri>("tree")!!
+        val grant = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+        context.contentResolver.takePersistableUriPermission(tree, grant)
+        val models = androidx.lifecycle.ViewModelStore()
+        var model: EditorViewModel? = null
+        try {
+            val storage = NotebookStorage(context, folder, scope); storage.initialize()
+            val local = storage.noteFiles().create("local note")
+            storage.change(tree); assertTrue(storage.awaitSync())
+            val store = storage.noteFiles().format3.store
+            val incoming = store.create(NoteInfo(UUID.randomUUID().toString(), "remote note", 2, 2))
+            ImmutableNoteTransport(store, PackedDocumentFiles(context.contentResolver, tree, "misq-v3")).publish(incoming)
+            control("test-hold-reads", true)
+            val started = android.os.SystemClock.elapsedRealtime()
+            val editor = withContext(Dispatchers.Main) {
+                androidx.lifecycle.ViewModelProvider(models, androidx.lifecycle.ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
+                    it.configureStorage(context, folder, File(folder, "ui-cache")); it.start(folder)
+                }
+            }
+            model = editor
+            withTimeout(3000) { while (editor.workspace.value.working) delay(5) }
+            assertTrue(android.os.SystemClock.elapsedRealtime() - started < 3000)
+            assertEquals(listOf(local.info.id), editor.workspace.value.notes.map { it.id })
+            withTimeout(10000) { while (control("test-read-waiting")?.getBoolean("waiting") != true) delay(5) }
+            if (editSettings) withContext(Dispatchers.Main) { editor.listGrid(false) }
+            if (openNote) {
+                withContext(Dispatchers.Main) { editor.openNote(local.info.id) }
+                withTimeout(10000) { while (editor.workspace.value.working) delay(5) }
+                assertEquals(local.info.id, editor.workspace.value.current?.id)
+            }
+            control("test-hold-reads", false)
+            withTimeout(30000) { while (editor.workspace.value.syncing) delay(10) }
+            assertNull(editor.workspace.value.syncError)
+            assertFalse(editor.workspace.value.working)
+            if (editSettings) {
+                assertFalse(editor.library.value.value.grid)
+                withTimeout(10000) { while (editor.library.value.saving) delay(10) }
+                assertFalse(LibraryPreferencesFile(File(folder, "library.hwp")).read().grid)
+            } else if (openNote) {
+                assertEquals(local.info.id, editor.workspace.value.current?.id)
+                assertEquals(listOf(local.info.id), editor.workspace.value.notes.map { it.id })
+                withContext(Dispatchers.Main) { editor.closeNote() }
+                withTimeout(30000) {
+                    while (editor.workspace.value.working || editor.workspace.value.notes.none { it.id == incoming.info.id }) delay(10)
+                }
+                assertNull(editor.workspace.value.current)
+                assertEquals(setOf(local.info.id, incoming.info.id), editor.workspace.value.notes.map { it.id }.toSet())
+            } else {
+                assertEquals(setOf(local.info.id, incoming.info.id), editor.workspace.value.notes.map { it.id }.toSet())
+            }
+        } finally {
+            control("test-hold-reads", false)
+            val job = model?.viewModelScope?.coroutineContext?.get(Job)
+            withContext(Dispatchers.Main) { models.clear() }
+            job?.join()
+            DocumentsContract.deleteDocument(context.contentResolver, DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree)))
+            runCatching { context.contentResolver.releasePersistableUriPermission(tree, grant) }
+        }
+    }
+    @Test fun localListIsReadyWhileRemoteReadsWaitAndRefreshesAfterSync() = runBlocking { slowRemoteStartup(false) }
+    @Test fun settingsChangedDuringStartupSyncKeepTheirLatestValue() = runBlocking { slowRemoteStartup(true) }
+    @Test fun noteOpenedDuringStartupSyncStaysOpenAndReceivesNewNotesAfterClosing() = runBlocking { slowRemoteStartup(false, true) }
+
     private suspend fun isolated(test: suspend (Context, File, CoroutineScope) -> Unit) {
         val base = InstrumentationRegistry.getInstrumentation().targetContext
         AppMessages.configure(base)
