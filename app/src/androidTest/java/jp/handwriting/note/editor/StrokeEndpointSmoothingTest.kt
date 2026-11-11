@@ -135,4 +135,38 @@ class StrokeEndpointSmoothingTest {
         val a = render(predicted); val b = render(reference)
         try { assertPixelsEqual(a, b) } finally { a.recycle(); b.recycle() }
     }
+
+    @Test fun gradualTaperKeepsItsUncorrectedOutlineAtBothEnds() {
+        val uncorrected = Brush.createWithColorIntArgb(BrushFamily(BrushTip(behaviors = listOf(
+            BrushBehavior(listOf(BrushBehavior.TargetNode(BrushBehavior.Target.SIZE_MULTIPLIER,
+                0.2f, 1f, BrushBehavior.SourceNode(BrushBehavior.Source.NORMALIZED_PRESSURE, 0f, 1f)))),
+        ))), Color.BLACK, 2f, 0.001f)
+        for (timeScale in listOf(4L, 40L)) for (rising in listOf(false, true)) {
+            val pressures: (Int) -> Float = { i ->
+                val taper = (i / 128f).coerceIn(0f, 1f)
+                if (rising) taper else 1f - taper
+            }
+            val corrected = render(live(brush(), timeScale = timeScale, pressure = pressures))
+            val reference = render(live(uncorrected, timeScale = timeScale, pressure = pressures))
+            try { assertPixelsEqual(reference, corrected) }
+            finally { corrected.recycle(); reference.recycle() }
+        }
+    }
+
+    @Test fun suddenPressureDipNearEitherEndpointIsFilledWhileWriting() {
+        val uncorrected = Brush.createWithColorIntArgb(BrushFamily(BrushTip(behaviors = listOf(
+            BrushBehavior(listOf(BrushBehavior.TargetNode(BrushBehavior.Target.SIZE_MULTIPLIER,
+                0.2f, 1f, BrushBehavior.SourceNode(BrushBehavior.Source.NORMALIZED_PRESSURE, 0f, 1f)))),
+        ))), Color.BLACK, 2f, 0.001f)
+        for (drop in listOf(8, 112)) {
+            val pressures: (Int) -> Float = { if (it in drop until drop + 4) 0f else 1f }
+            val corrected = render(live(brush(), pressure = pressures))
+            val reference = render(live(uncorrected, pressure = pressures))
+            try {
+                val range = (32 + drop * 4)..(32 + (drop + 4) * 4)
+                assertTrue("Endpoint dip at $drop must be filled",
+                    range.sumOf { coverage(corrected, it) } > range.sumOf { coverage(reference, it) })
+            } finally { corrected.recycle(); reference.recycle() }
+        }
+    }
 }

@@ -51,9 +51,11 @@ internal object InkBrushes {
         )
         val difference = BrushBehavior.BinaryOpNode(BrushBehavior.BinaryOp.SUM, damped,
             BrushBehavior.BinaryOpNode(BrushBehavior.BinaryOp.PRODUCT, BrushBehavior.ConstantNode(-1f), pressure))
-        // Map [-1, 1] to [0, 1], then apply max(difference, 0) with a piecewise linear curve.
+        // Ignore a lag of up to 10% of the variable width: gradual tapers already
+        // have a smooth outline. Above that, fill continuously to avoid a new step
+        // where correction begins. This also leaves pressure increases immediate.
         val positiveDifference = BrushBehavior.ResponseNode(
-            EasingFunction.Linear(listOf(ImmutableVec(0.5f, 0f))),
+            EasingFunction.Linear(listOf(ImmutableVec(0.55f, 0f))),
             BrushBehavior.InterpolationNode(BrushBehavior.Interpolation.LERP, difference,
                 BrushBehavior.ConstantNode(0.5f), BrushBehavior.ConstantNode(1f)),
         )
