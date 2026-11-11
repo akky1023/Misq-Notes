@@ -6,6 +6,7 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
+import android.view.KeyEvent
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.activity.compose.setContent
@@ -66,9 +67,15 @@ class NoteListDragTest {
             send(MotionEvent.ACTION_DOWN, x, y)
             try {
                 SystemClock.sleep(ViewConfiguration.getLongPressTimeout().toLong() + 150)
+                waitUntil("Long press shows note actions before dragging") {
+                    automation.rootInActiveWindow?.findAccessibilityNodeInfosByText(AppMessages.text(R.string.delete))?.isNotEmpty() == true
+                }
                 for (step in 1..12) {
                     send(MotionEvent.ACTION_MOVE, x + (to.exactCenterX() - x) * step / 12, y + (to.exactCenterY() - y) * step / 12)
                     SystemClock.sleep(25)
+                }
+                waitUntil("Dragging dismisses the action menu") {
+                    automation.rootInActiveWindow?.findAccessibilityNodeInfosByText(AppMessages.text(R.string.delete))?.isEmpty() == true
                 }
             } finally { send(MotionEvent.ACTION_UP, to.exactCenterX(), to.exactCenterY()) }
         }
@@ -95,6 +102,23 @@ class NoteListDragTest {
                         finally { screenshot.recycle() }
                     }
                     val from = bounds(AppMessages.text(R.string.note_thumbnail, "Drag A")); val to = bounds(AppMessages.text(R.string.note_thumbnail, "Drag B"))
+                    // Accessibility users can open the same actions without a physical drag.
+                    fun longClick(node: AccessibilityNodeInfo?): Boolean {
+                        if (node == null) return false
+                        if (node.isLongClickable && node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) return true
+                        return longClick(node.parent)
+                    }
+                    assertTrue(automation.rootInActiveWindow.findAccessibilityNodeInfosByText("Drag A").any(::longClick))
+                    for (label in listOf(R.string.rename, R.string.export, R.string.delete)) {
+                        waitUntil("Action $label in grid=$grid") {
+                            automation.rootInActiveWindow?.findAccessibilityNodeInfosByText(AppMessages.text(label))?.isNotEmpty() == true
+                        }
+                    }
+                    assertNull("Opening actions must not open a note", model.workspace.value.current)
+                    instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
+                    waitUntil("Back dismisses actions") {
+                        automation.rootInActiveWindow?.findAccessibilityNodeInfosByText(AppMessages.text(R.string.export))?.isEmpty() == true
+                    }
                     drag(from, to)
                     try {
                         waitUntil("reorder in grid=$grid") { model.library.value.value.orders[""] == listOf(b.info.id, a.info.id) }
