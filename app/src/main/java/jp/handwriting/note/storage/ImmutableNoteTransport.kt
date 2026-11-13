@@ -7,8 +7,9 @@ import java.util.UUID
 /** Stable logical hashes, unique physical uploads. Incomplete files are never overwritten. */
 internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, private val remote: PackedFiles) {
     @Volatile private var inventory = emptySet<String>()
-    private val sealed = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val checked = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val sealed = mutableMapOf<String, String>()
+    private var sealCandidates = emptyMap<String, List<String>>()
+    private var indexedInventory = emptySet<String>()
     private val acknowledged = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val snapshotDepth = ThreadLocal<Int>()
     init { store.fetch = ::openLogical }
@@ -27,30 +28,43 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
     @Synchronized private fun rememberObject(id: String, name: String, seal: String) {
         inventory = inventory + name + seal
         sealed[id] = name
-        checked += seal
     }
     @Synchronized private fun refresh() {
         if ((snapshotDepth.get() ?: 0) > 0) return
         inventory = remote.names()
         sealed.entries.removeAll { (_, name) -> name !in inventory || "seal-${name.removePrefix("object-")}" !in inventory }
-        inventory.filter { it.matches(SEAL) && it !in checked }.forEach { name ->
-            val hash = name.substring(5, 69); val body = "object-${name.removePrefix("seal-")}"
-            if (body in inventory && runCatching { remote.read(name).contentEquals(hash.toByteArray(Charsets.US_ASCII)) }.getOrDefault(false)) {
-                sealed["o-$hash"] = body; checked += name
-            }
+        if (inventory != indexedInventory) {
+            sealCandidates = inventory.asSequence().filter { it.matches(SEAL) }.groupBy { "o-${it.substring(5, 69)}" }
+            indexedInventory = inventory
         }
     }
+    /** Validate a seal when its object is needed by a published or received revision. */
+    @Synchronized private fun sealedBody(id: String): String? {
+        sealed[id]?.let { return it }
+        val expected = id.removePrefix("o-").toByteArray(Charsets.US_ASCII)
+        for (seal in sealCandidates[id].orEmpty()) {
+            val body = "object-${seal.removePrefix("seal-")}"
+            if (body in inventory && runCatching { remote.read(seal).contentEquals(expected) }.getOrDefault(false)) {
+                sealed[id] = body
+                return body
+            }
+        }
+        return null
+    }
     private fun openLogical(id: String): InputStream {
-        if (sealed[id] == null) refresh()
-        return remote.openRead(sealed[id] ?: throw IOException("Uncommitted or missing external object: $id"))
+        val body = sealedBody(id) ?: if ((snapshotDepth.get() ?: 0) == 0) {
+            refresh()
+            sealedBody(id)
+        } else null
+        return remote.openRead(body ?: throw IOException("Uncommitted or missing external object: $id"))
     }
     fun publish(root: ImmutableNoteStore.Root, checkpoint: () -> Unit = {}) {
         refresh()
-        val boundary = if (acknowledged.all { sealed.containsKey(it) }) acknowledged else emptySet()
+        val boundary = if (acknowledged.all { sealedBody(it) != null }) acknowledged else emptySet()
         val closure = store.closure(root, boundary)
         closure.forEach { id ->
             checkpoint()
-            val existing = sealed[id]
+            val existing = sealedBody(id)
             if (existing != null) return@forEach
             val suffix = "${id.removePrefix("o-")}-${UUID.randomUUID()}"
             val name = "object-$suffix"
@@ -75,7 +89,7 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
         remote.openRead(name).use { store.importObject(hash, it) }
         val root = store.root(hash); require(root.info.id == name.substring(7, 43))
         val closure = store.closure(root); checkpoint()
-        if (closure.any { !sealed.containsKey(it) }) throw IOException("Incomplete incoming state; previous state has been retained")
+        if (closure.any { sealedBody(it) == null }) throw IOException("Incomplete incoming state; previous state has been retained")
         store.verify(root, bodies = false)
         return root
     }
@@ -84,7 +98,7 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
         refresh()
         store.closure(root).forEach { id ->
             checkpoint()
-            val name = sealed[id] ?: throw IOException("Missing committed object: $id")
+            val name = sealedBody(id) ?: throw IOException("Missing committed object: $id")
             check(remote.digest(name) == id.removePrefix("o-")) { "Damaged committed object: $id" }
         }
     }

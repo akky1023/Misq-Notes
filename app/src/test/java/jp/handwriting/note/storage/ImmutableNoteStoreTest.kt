@@ -78,8 +78,9 @@ class ImmutableNoteStoreTest {
     private class Memory : PackedFiles {
         val data = linkedMapOf<String, ByteArray>(); var writes = 0; var failAt = Int.MAX_VALUE
         var inventories = 0
+        val reads = mutableListOf<String>()
         override fun names() = data.keys.toSet().also { inventories++ }
-        override fun read(name: String) = data.getValue(name).copyOf()
+        override fun read(name: String) = data.getValue(name).copyOf().also { reads += name }
         override fun write(name: String, bytes: ByteArray) {
             check(name !in data)
             writes++
@@ -87,6 +88,30 @@ class ImmutableNoteStoreTest {
             data[name] = bytes.copyOf()
         }
         override fun delete(name: String) { error("Physical deletion must remain disabled") }
+    }
+    @Test fun syncValidatesReferencedSealsAndSkipsUnrelatedObjects() {
+        val store = ImmutableNoteStore(temp.newFolder())
+        val current = store.importNote(source())
+        val unrelated = store.put(byteArrayOf(4, 5, 6))
+        val remote = Memory()
+        ImmutableNoteTransport(store, remote).publish(current)
+        val suffix = "${unrelated.removePrefix("o-")}-${UUID.randomUUID()}"
+        remote.data["object-$suffix"] = byteArrayOf(4, 5, 6)
+        val unusedSeal = "seal-$suffix"
+        remote.data[unusedSeal] = unrelated.removePrefix("o-").toByteArray()
+        val receiver = ImmutableNoteTransport(ImmutableNoteStore(temp.newFolder()), remote)
+        remote.reads.clear()
+        receiver.withInventorySnapshot {
+            assertEquals(listOf(current.id), receiver.heads(current.info.id).map { it.id })
+        }
+        assertTrue(remote.reads.any { it.startsWith("seal-") })
+        assertFalse(unusedSeal in remote.reads)
+        val originalSeal = remote.data.keys.first { it.startsWith("seal-${current.id.removePrefix("o-")}-") }
+        val alternateSuffix = "${current.id.removePrefix("o-")}-${UUID.randomUUID()}"
+        remote.data["object-$alternateSuffix"] = remote.data.getValue(originalSeal.replace("seal-", "object-"))
+        remote.data["seal-$alternateSuffix"] = remote.data.getValue(originalSeal)
+        remote.data.remove(originalSeal)
+        assertEquals(listOf(current.id), receiver.heads(current.info.id).map { it.id })
     }
     @Test fun syncBatchListsOnceAndSeesItsOwnNewCommitsAndObjects() {
         val store = ImmutableNoteStore(temp.newFolder())
