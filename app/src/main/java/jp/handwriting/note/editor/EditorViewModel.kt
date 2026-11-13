@@ -150,6 +150,7 @@ class EditorViewModel : ViewModel() {
     private var backgroundLoading = false
     private var regionLoading = false
     internal var viewportGestureActive = false
+    internal val prefetchIdle = PrefetchIdleGate()
     private var regionFailed = false
     private var regionTop = Float.NaN
     private var regionBottom = Float.NaN
@@ -208,6 +209,7 @@ class EditorViewModel : ViewModel() {
     init {
         edits.onChange = ::publish
         edits.onContentChange = { added, removed ->
+            if (!restoring && !applyingRead) prefetchIdle.interaction()
             if (repository?.usesImmutable == true && !restoring && !applyingRead) {
                 val version = ++strokeChangeVersion
                 (added + removed).forEach { strokeChanges[it.id] = version }
@@ -627,6 +629,7 @@ class EditorViewModel : ViewModel() {
     }
     private fun enter(note: LoadedNote, position: ViewPosition? = null) {
         stopBackgroundLoading()
+        prefetchIdle.interaction()
         regionRun++
         regionJob?.cancel()
         lazyBase = note.manifest.takeIf { note.partial }
@@ -1227,25 +1230,29 @@ class EditorViewModel : ViewModel() {
         backgroundLoading = true
         backgroundLoadJob = viewModelScope.launch {
             try {
-                kotlinx.coroutines.delay(100) // Present the initial viewport before prefetch work.
                 val context = currentCoroutineContext()
                 fun active() = backgroundRun == run && lazyBase === base && !closing
                 fun interacting() = viewportGestureActive || edits.busy || selectionWorking || selectionGesture || insertingSpace ||
                     regionJob?.isActive == true || hydratingAll
                 while (active()) {
-                    while (active() && interacting()) kotlinx.coroutines.delay(20)
+                    awaitPrefetchIdle(::interacting)
                     if (!active()) break
                     val loaded = hydrated.toSet()
                     val height = (viewport.bottom - viewport.position.top).coerceAtLeast(1000f)
                     val top = (viewport.position.top - height).coerceAtLeast(0f)
                     val bottom = viewport.bottom + height
-                    val entries = withContext(Dispatchers.IO) {
-                        repository!!.loadNextRegion(base.info.id, top, bottom, loaded) { context.ensureActive() }
-                    }
+                    val entries = try {
+                        withContext(Dispatchers.IO) {
+                            repository!!.loadNextRegion(base.info.id, top, bottom, loaded) {
+                                context.ensureActive()
+                                if (!prefetchIdle.isIdle()) throw PrefetchInterrupted()
+                            }
+                        }
+                    } catch (_: PrefetchInterrupted) { continue }
                     if (!active()) break
                     if (entries.isEmpty()) break // Unread distant regions remain referenced, never assumed empty.
                     for (batch in entries.chunked(128)) {
-                        while (active() && interacting()) kotlinx.coroutines.delay(16)
+                        awaitPrefetchIdle(::interacting)
                         if (!active()) return@launch
                         val added = batch.filter { it.id !in hydrated }
                         hydrated.addAll(added.map { it.id }); hydrateRead(added)
@@ -1258,6 +1265,14 @@ class EditorViewModel : ViewModel() {
             finally { if (backgroundRun == run) { backgroundLoading = false; publish() } }
         }
         publish()
+    }
+    private class PrefetchInterrupted : kotlinx.coroutines.CancellationException()
+
+    private suspend fun awaitPrefetchIdle(interacting: () -> Boolean) {
+        do {
+            prefetchIdle.awaitIdle()
+            while (interacting()) kotlinx.coroutines.delay(20)
+        } while (!prefetchIdle.isIdle())
     }
     internal fun prepareSpaceInsertion(y: Float, ready: (Boolean) -> Unit) {
         viewModelScope.launch {

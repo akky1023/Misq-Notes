@@ -29,7 +29,8 @@ class Format3IntegrationTest {
             .add(androidx.ink.brush.InputToolType.STYLUS, 120f, y + 20, 20, pressure = .5f)
         return OrderedEdits.Entry(id, EditorStroke(androidx.ink.strokes.Stroke(brush, inputs)))
     }
-    private suspend fun fixture(external: Boolean = false, test: suspend (File, NotebookStorage, NoteManifest, List<OrderedEdits.Entry<EditorStroke>>) -> Unit) {
+    private suspend fun fixture(external: Boolean = false, secondStrokeY: Float = 10000f,
+        test: suspend (File, NotebookStorage, NoteManifest, List<OrderedEdits.Entry<EditorStroke>>) -> Unit) {
         check(context.packageName == "net.neomenia.misqnotes.probe"); AppMessages.configure(context)
         val preferences = context.getSharedPreferences("note-storage", Context.MODE_PRIVATE)
         val saved = preferences.all.toMap(); preferences.edit().clear().commit()
@@ -39,7 +40,7 @@ class Format3IntegrationTest {
         try {
             val storage = NotebookStorage(context, folder, scope); assertFalse(storage.initialize())
             val files = storage.noteFiles(); val empty = files.create("three regions")
-            val entries = listOf(stroke(1, 100f), stroke(2, 10000f), stroke(3, 20000f))
+            val entries = listOf(stroke(1, 100f), stroke(2, secondStrokeY), stroke(3, 20000f))
             val manifest = empty.copy(strokes = entries.map { StrokeRef(it.id, it.value.storageId) }, nextId = 4)
             NoteRepository(files).save(NoteSnapshot(manifest, entries))
             val exchange = File(folder, "exchange-source/${manifest.info.id}.misq").also { it.parentFile!!.mkdirs() }
@@ -69,6 +70,40 @@ class Format3IntegrationTest {
                 is Set<*> -> { @Suppress("UNCHECKED_CAST") val strings = value as Set<String>; edit.putStringSet(key, strings) }
             } }
             edit.commit(); folder.deleteRecursively()
+        }
+    }
+    @Test fun openingLoadsVisibleInkAndDefersNearbyInkUntilContactEnds() = runBlocking {
+        fixture(secondStrokeY = 1800f) { folder, _, manifest, _ ->
+            val models = ViewModelStore()
+            val model = withContext(Dispatchers.Main) {
+                ViewModelProvider(models, ViewModelProvider.NewInstanceFactory())[EditorViewModel::class.java].also {
+                    it.viewport.size(1000f, 1000f)
+                    it.configureStorage(context, folder)
+                    it.start(folder)
+                }
+            }
+            try {
+                withTimeout(10000) { model.workspace.first { !it.working } }
+                withContext(Dispatchers.Main) {
+                    model.openNote(manifest.info.id)
+                    model.prefetchIdle.contact(true)
+                }
+                withTimeout(10000) { model.workspace.first { it.current != null && !it.working } }
+                delay(1200)
+                withContext(Dispatchers.Main) {
+                    assertEquals(listOf(1L), model.edits.snapshot().map { it.id })
+                    assertFalse(model.ui.value.busy)
+                    model.prefetchIdle.contact(false)
+                }
+                delay(200)
+                withContext(Dispatchers.Main) { assertEquals(listOf(1L), model.edits.snapshot().map { it.id }) }
+                withTimeout(10000) { model.ui.first { !it.loadingRest } }
+                withContext(Dispatchers.Main) { assertEquals(listOf(1L, 2L), model.edits.snapshot().map { it.id }) }
+            } finally {
+                val job = model.viewModelScope.coroutineContext[Job]!!
+                withContext(Dispatchers.Main) { models.clear() }
+                job.join()
+            }
         }
     }
     @Test fun partialNoteSupportsContinuousSwipePinchAndLoadsFinalViewport() = runBlocking {
