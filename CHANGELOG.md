@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.0](https://github.com/akky1023/Misq-Notes/compare/v0.6.1...v0.7.0) (2026-11-13)
+
+
+### 機能追加
+
+* 一覧の操作を長押しメニューに変更 ([7974e69](https://github.com/akky1023/Misq-Notes/commit/7974e69590f37f514a47f3ae39d13d98e79c2ecc))
+
+
+### 修正
+
+* 緩やかな筆圧変化を補正から除外 ([3b9b8b3](https://github.com/akky1023/Misq-Notes/commit/3b9b8b3c7cde99991ded49ba3602025192b0fb35))
+
+
+### 性能改善
+
+* 先読み処理を軽く ([c5bb22a](https://github.com/akky1023/Misq-Notes/commit/c5bb22a2c9e71882a8fe366fc07b84f306c85bb9))
+* 外部同期の検証を軽く ([f66851a](https://github.com/akky1023/Misq-Notes/commit/f66851a82e571f5efee4ef1d9ca54d0f8564b1e6))
+* 自動保存も軽く ([b0e75f8](https://github.com/akky1023/Misq-Notes/commit/b0e75f8fe704495c496bb2abfbf747009cc0275c))
+
 ## [0.6.1](https://github.com/akky1023/Misq-Notes/compare/v0.6.0...v0.6.1) (2026-11-09)
 
 
