@@ -37,6 +37,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import jp.handwriting.note.editor.*
 import jp.handwriting.note.storage.*
@@ -56,7 +57,9 @@ private class NoteDrag {
     var order by mutableStateOf<List<String>?>(null)
     var destination by mutableStateOf<String?>(null)
     var initialOrder = emptyList<String>()
-    fun clear() { note = null; order = null; destination = null }
+    var movement = Offset.Zero
+    var moved = false
+    fun clear() { note = null; order = null; destination = null; movement = Offset.Zero; moved = false }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -73,9 +76,11 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
     var exportId by rememberSaveable { mutableStateOf<String?>(null) }
     var createMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
+    var actionNote by remember(folder) { mutableStateOf<String?>(null) }
     val current = data.folders.firstOrNull { it.id == folder }
     LaunchedEffect(data.folders, working, folder) { if (!working && folder != null && current == null) onFolder(null) }
     BackHandler(folder != null) { onFolder(current?.parent) }
+    BackHandler(actionNote != null) { actionNote = null }
     val folders = data.folders.filter { it.parent == folder }.sortedBy { it.name }
     val sorted = data.sorted(notes, folder)
     val drag = remember(folder) { NoteDrag() }
@@ -92,6 +97,7 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
     val haptic = LocalHapticFeedback.current
     val density = LocalDensity.current
     val scrollEdge = with(density) { 64.dp.toPx() }
+    val touchSlop = androidx.compose.ui.platform.LocalViewConfiguration.current.touchSlop
     val latestWorking by rememberUpdatedState(working)
     LaunchedEffect(folder) { state.scrollToItem(0) }
     LaunchedEffect(drag.note) {
@@ -103,6 +109,7 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
             previousFrame = frame
             val y = drag.position.y + rootPosition.y
             val amount = when {
+                !drag.moved -> 0f
                 y < gridBounds.top + scrollEdge -> -((gridBounds.top + scrollEdge - y) / scrollEdge).coerceIn(0f, 1f)
                 y > gridBounds.bottom - scrollEdge -> ((y - gridBounds.bottom + scrollEdge) / scrollEdge).coerceIn(0f, 1f)
                 else -> 0f
@@ -112,7 +119,7 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
     }
     fun finishDrag() {
         val note = drag.note
-        if (note != null && !latestWorking) {
+        if (note != null && drag.moved && !latestWorking) {
             val destination = folderBounds.entries.firstOrNull { it.value.contains(drag.position + rootPosition) }?.key
             if (destination != null) model.moveNote(note.id, destination.ifEmpty { null })
             else if (drag.order != drag.initialOrder) drag.order?.let { model.reorderNotes(folder, it) }
@@ -129,13 +136,19 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
                         if (note != null && hit != null) {
                             drag.note = note; drag.position = point; drag.grab = point + rootPosition - hit.value.topLeft
                             drag.width = hit.value.width; drag.initialOrder = latestVisible.map { it.id }; drag.order = drag.initialOrder
+                            actionNote = note.id
                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         }
                     }
-                }, onDragEnd = ::finishDrag, onDragCancel = { drag.clear() },
+                }, onDragEnd = ::finishDrag, onDragCancel = { drag.clear(); actionNote = null },
             ) { change, delta ->
                 if (drag.note == null) return@detectDragGesturesAfterLongPress
                 change.consume(); drag.position += delta
+                drag.movement += delta
+                if (!drag.moved && drag.movement.getDistance() > touchSlop) {
+                    drag.moved = true; actionNote = null
+                }
+                if (!drag.moved) return@detectDragGesturesAfterLongPress
                 val point = drag.position + rootPosition
                 drag.destination = folderBounds.entries.firstOrNull { it.value.contains(point) }?.key
                 if (drag.destination == null) {
@@ -199,7 +212,8 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
                         DisposableEffect(note.id) { onDispose { noteBounds.remove(note.id) } }
                         NoteTile(note, data.grid, working, model,
                             Modifier.onGloballyPositioned { noteBounds[note.id] = it.boundsInRoot() }
-                                .graphicsLayer { alpha = if (drag.note?.id == note.id) 0.25f else 1f },
+                                .graphicsLayer { alpha = if (drag.moved && drag.note?.id == note.id) 0.25f else 1f },
+                            menu = actionNote == note.id, onMenu = { actionNote = note.id }, onDismissMenu = { actionNote = null },
                             onRename = { rename = note }, onDelete = { delete = note }, onExport = { exportId = note.id })
                     }
                     if (folders.isEmpty() && visible.isEmpty()) item(span = { GridItemSpan(maxLineSpan) }) {
@@ -219,7 +233,7 @@ internal fun NoteList(notes: List<NoteSummary>, working: Boolean, model: EditorV
                 DropdownMenuItem({ Text(AppMessages.text(R.string.new_folder)) }, { createMenu = false; create = "folder" }, leadingIcon = { Icon(ToolbarIcons.Folder, null) })
             }
         }
-        drag.note?.let { note ->
+        drag.note?.takeIf { drag.moved }?.let { note ->
             val width = with(density) { drag.width.toDp() }
             Surface(Modifier.offset { IntOffset((drag.position.x - drag.grab.x).roundToInt(), (drag.position.y - drag.grab.y).roundToInt()) }
                 .width(width).semantics { contentDescription = AppMessages.text(R.string.dragging_note) }.graphicsLayer { alpha = 0.7f }, shape = RoundedCornerShape(12.dp), shadowElevation = 12.dp) {
@@ -250,20 +264,22 @@ private val folderShape = GenericShape { size, _ ->
     lineTo(0f, h * 0.06f + r); quadraticTo(0f, h * 0.06f, r, h * 0.06f); close()
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FolderTile(entry: NoteFolder, grid: Boolean, working: Boolean, drop: Boolean, modifier: Modifier,
     onOpen: () -> Unit, onRename: () -> Unit, onColor: () -> Unit, onDelete: () -> Unit, canDelete: Boolean) {
     var menu by remember { mutableStateOf(false) }
     val color = Color(entry.color)
     val text = if (((entry.color ushr 16) and 255) * 299 + ((entry.color ushr 8) and 255) * 587 + (entry.color and 255) * 114 > 150000) Color(0xFF202B33) else Color.White
-    Surface(onClick = onOpen, enabled = !working, modifier = modifier.fillMaxWidth().semantics { contentDescription = AppMessages.text(R.string.folder_description, entry.name) }.then(if (grid) Modifier.aspectRatio(1.15f) else Modifier),
+    Surface(modifier = modifier.fillMaxWidth().combinedClickable(enabled = !working, onClick = onOpen,
+        onLongClickLabel = AppMessages.text(R.string.folder_actions), onLongClick = { menu = true })
+        .semantics { contentDescription = AppMessages.text(R.string.folder_description, entry.name) }.then(if (grid) Modifier.aspectRatio(1.15f) else Modifier),
         shape = if (grid) folderShape else RoundedCornerShape(12.dp), color = if (grid) color else MaterialTheme.colorScheme.surfaceContainerLow,
         contentColor = if (grid) text else MaterialTheme.colorScheme.onSurface,
         border = if (drop) BorderStroke(3.dp, MaterialTheme.colorScheme.primary) else null) {
         @Composable fun Menu() {
             Box {
-                ToolAction(AppMessages.text(R.string.folder_actions), ToolbarIcons.More, !working) { menu = true }
-                DropdownMenu(menu, { menu = false }) {
+                DropdownMenu(menu && !working, { menu = false }) {
                     DropdownMenuItem({ Text(AppMessages.text(R.string.rename)) }, { menu = false; onRename() })
                     DropdownMenuItem({ Text(AppMessages.text(R.string.change_color)) }, { menu = false; onColor() })
                     DropdownMenuItem({ Text(AppMessages.text(R.string.delete)) }, { menu = false; onDelete() }, enabled = canDelete)
@@ -284,19 +300,22 @@ private fun FolderTile(entry: NoteFolder, grid: Boolean, working: Boolean, drop:
 }
 
 @Composable
-private fun NoteTile(note: NoteSummary, grid: Boolean, working: Boolean, model: EditorViewModel, modifier: Modifier, onRename: () -> Unit, onDelete: () -> Unit, onExport: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
-    Card(onClick = { model.openNote(note.id) }, enabled = !working, modifier = modifier.fillMaxWidth()) {
+private fun NoteTile(note: NoteSummary, grid: Boolean, working: Boolean, model: EditorViewModel, modifier: Modifier,
+    menu: Boolean, onMenu: () -> Unit, onDismissMenu: () -> Unit,
+    onRename: () -> Unit, onDelete: () -> Unit, onExport: () -> Unit) {
+    Card(onClick = { model.openNote(note.id) }, enabled = !working, modifier = modifier.fillMaxWidth().semantics {
+        if (!working) onLongClick(AppMessages.text(R.string.note_actions)) { onMenu(); true }
+    }) {
         @Composable fun Details(modifier: Modifier) {
             Column(modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(note.title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     Box {
-                        ToolAction(AppMessages.text(R.string.note_actions), ToolbarIcons.More, !working) { menu = true }
-                        DropdownMenu(menu, { menu = false }) {
-                            DropdownMenuItem({ Text(AppMessages.text(R.string.rename)) }, { menu = false; onRename() }, enabled = note.problem == null)
-                            DropdownMenuItem({ Text(AppMessages.text(R.string.export)) }, { menu = false; onExport() }, enabled = note.problem == null)
-                            DropdownMenuItem({ Text(AppMessages.text(R.string.delete)) }, { menu = false; onDelete() })
+                        // Keep the held pointer in the grid so it can continue into a drag.
+                        DropdownMenu(menu && !working, onDismissMenu, properties = PopupProperties(focusable = false)) {
+                            DropdownMenuItem({ Text(AppMessages.text(R.string.rename)) }, { onDismissMenu(); onRename() }, enabled = note.problem == null)
+                            DropdownMenuItem({ Text(AppMessages.text(R.string.export)) }, { onDismissMenu(); onExport() }, enabled = note.problem == null)
+                            DropdownMenuItem({ Text(AppMessages.text(R.string.delete)) }, { onDismissMenu(); onDelete() })
                         }
                     }
                 }

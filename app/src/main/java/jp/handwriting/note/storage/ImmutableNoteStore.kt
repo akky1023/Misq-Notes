@@ -23,6 +23,24 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
     private val objects = File(directory, "objects").also { check(it.isDirectory || it.mkdirs()) }
     private val heads = File(directory, "heads").also { check(it.isDirectory || it.mkdirs()) }
     init { syncNoteDirectory(directory); directory.parentFile?.let(::syncNoteDirectory) }
+    private val batchingObjectWrites = ThreadLocal<Boolean>()
+
+    private fun syncObjectDirectory() {
+        if (batchingObjectWrites.get() != true) syncNoteDirectory(objects)
+    }
+
+    /** Sync all new object names before exposing the new head. File contents are synced individually. */
+    fun installEdit(edit: () -> Root) {
+        check(batchingObjectWrites.get() != true)
+        batchingObjectWrites.set(true)
+        val root = try {
+            edit()
+        } finally {
+            batchingObjectWrites.remove()
+            syncNoteDirectory(objects)
+        }
+        install(root, validate = false)
+    }
     private val pageCache = object : LinkedHashMap<String, List<Row>>(8, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Row>>?) = size > 8
     }
@@ -39,7 +57,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
         try {
             FileOutputStream(temporary).use { it.write(bytes); it.fd.sync() }
             Files.move(temporary.toPath(), file.toPath(), ATOMIC_MOVE)
-            syncNoteDirectory(objects)
+            syncObjectDirectory()
         } finally { temporary.delete() }
         return id
     }
@@ -238,7 +256,7 @@ internal class ImmutableNoteStore(val directory: File, internal var fetch: ((Str
         } }
         val name = "o-${ContentHash.digest(temporary)}"; val target = objectFile(name)
         if (target.exists()) check(ContentHash.digest(target) == name.removePrefix("o-"))
-        else { Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE); syncNoteDirectory(objects) }
+        else { Files.move(temporary.toPath(), target.toPath(), ATOMIC_MOVE); syncObjectDirectory() }
         name
         } finally { temporary.delete() }
         return records.mapValues { (_, bytes) -> Body(id, bytes.size, ContentHash.digest(bytes)) }

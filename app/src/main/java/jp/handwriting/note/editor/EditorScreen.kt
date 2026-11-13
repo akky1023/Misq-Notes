@@ -146,10 +146,10 @@ fun EditorScreen(model: EditorViewModel, onCanvas: (InkCanvasView) -> Unit, onCa
                     Text("$zoomPercent%", Modifier.padding(horizontal = 28.dp, vertical = 18.dp), style = MaterialTheme.typography.displayMedium)
                 }
                 }
-                if (ui.loadingRegion || ui.loadingRest || workspace.saving || workspace.syncing || palette.saving || preferences.saving || library.saving) {
+                if (ui.loadingRegion || workspace.saving || workspace.syncing || palette.saving || preferences.saving || library.saving) {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp).size(22.dp)
-                            .semantics { contentDescription = AppMessages.text(when { ui.loadingRegion -> R.string.loading_region; ui.loadingRest -> R.string.loading_note; else -> R.string.saving }) },
+                            .semantics { contentDescription = AppMessages.text(if (ui.loadingRegion) R.string.loading_region else R.string.saving) },
                         strokeWidth = 2.dp,
                     )
                 }

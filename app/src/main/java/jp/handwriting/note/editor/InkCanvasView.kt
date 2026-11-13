@@ -176,7 +176,6 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             }.map { it.ink }
             prefetchVersion++
             if (prefetchPending.isNotEmpty() && prefetchJob?.isActive != true) prefetchJob = prefetchScope?.launch {
-                delay(300)
                 while (prefetchPending.isNotEmpty()) {
                     val version = prefetchVersion
                     val pending = prefetchPending
@@ -184,7 +183,10 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                     for (stroke in pending) {
                         // Navigation can use geometry prepared ahead on a worker. Pen contacts
                         // still take priority, and a new viewport replaces stale queued work.
-                        while (pointerId != null || model.edits.busy) delay(50)
+                        model.prefetchIdle.awaitIdle()
+                        while (model.edits.busy) delay(50)
+                        if (version != prefetchVersion) break
+                        model.prefetchIdle.awaitIdle()
                         if (version != prefetchVersion) break
                         withContext(Dispatchers.Default) { renderer.prefetch(stroke) }
                         yield()
@@ -589,6 +591,19 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         invalidate()
     }
     override fun onInterceptTouchEvent(event: MotionEvent) = true
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) model.prefetchIdle.contact(true)
+        return try {
+            super.dispatchTouchEvent(event).also { handled ->
+                if (!handled && event.actionMasked == MotionEvent.ACTION_DOWN) model.prefetchIdle.contact(false)
+            }
+        } finally {
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                model.prefetchIdle.contact(false)
+            }
+        }
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         parent?.requestDisallowInterceptTouchEvent(true)
         if (finishSpaceBeforeTouch(event, localCoordinates = true) { onTouchEvent(it) }) return true
@@ -779,6 +794,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     }
     /** No synchronous render-thread flush during drawing. Only completed inputs survive recreation. */
     fun settleForPause(dismissMenu: Boolean = true) {
+        model.prefetchIdle.contact(false)
         stylusNear = false
         finishFingerGesture()
         cancelGesture(dismissMenu)

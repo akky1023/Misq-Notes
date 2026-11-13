@@ -8,3 +8,5 @@ local.properties
 # Device captures and production notebook backups (private user data).
 captures/
 .signing/
+TASKS.md
+run-codex.ps1
