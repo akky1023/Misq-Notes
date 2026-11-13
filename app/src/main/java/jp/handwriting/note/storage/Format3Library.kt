@@ -31,8 +31,7 @@ internal class Format3Library(val store: ImmutableNoteStore, private val notes: 
             val p = placements[ref.storageId] ?: prior?.takeIf { it.ref == ref }?.placement ?: error("Missing placement for changed stroke")
             ref to (p to if (prior?.ref == ref) ByteArray(0) else encode(ref.storageId))
         }
-        val next = store.edit(base, note.info, note.nextId, observed, entries, addedSince)
-        store.install(next, validate = false)
+        store.installEdit { store.edit(base, note.info, note.nextId, observed, entries, addedSince) }
     }
     fun rename(id: String, title: String) {
         val root = checkNotNull(store.current(id))
