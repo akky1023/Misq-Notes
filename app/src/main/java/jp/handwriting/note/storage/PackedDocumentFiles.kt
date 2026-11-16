@@ -10,28 +10,38 @@ import java.io.InputStream
 internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: Uri, private val directoryName: String) : PackedFiles {
     private val root = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
     private var folder: Uri? = null
-    @Volatile private var known = java.util.concurrent.ConcurrentHashMap<String, Uri>()
-    private fun children(parent: Uri): MutableMap<String, Uri> {
+    private data class Document(val name: String, val id: String)
+    @Volatile private var known = java.util.concurrent.ConcurrentHashMap<String, Document>()
+    private fun children(parent: Uri, previous: Map<String, Document> = emptyMap()): java.util.concurrent.ConcurrentHashMap<String, Document> {
         val uri = DocumentsContract.buildChildDocumentsUriUsingTree(parent, DocumentsContract.getDocumentId(parent))
         return checkNotNull(resolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)).use { cursor ->
-            buildMap { while (cursor.moveToNext()) put(cursor.getString(1), DocumentsContract.buildDocumentUriUsingTree(parent, cursor.getString(0))) }.toMutableMap()
+            // Keep only raw document IDs. Uri eagerly retains encoded paths and tree prefixes per
+            // entry; building several complete maps during every sync can exhaust a 256 MiB heap.
+            java.util.concurrent.ConcurrentHashMap<String, Document>().apply {
+                while (cursor.moveToNext()) {
+                    val name = cursor.getString(1); val id = cursor.getString(0)
+                    val document = previous[name]?.takeIf { it.id == id } ?: Document(name, id)
+                    put(document.name, document)
+                }
+            }
         }
     }
     override fun names(): Set<String> {
         if (folder == null) folder = locate(false)
-        known = java.util.concurrent.ConcurrentHashMap(folder?.let(::children).orEmpty())
+        known = folder?.let { children(it, known) } ?: java.util.concurrent.ConcurrentHashMap()
         return known.keys.toSet()
     }
     private fun locate(create: Boolean): Uri? {
         var parent = root
         for (name in directoryName.split('/')) {
             require(name.isNotBlank() && name != "." && name != "..")
-            parent = children(parent)[name] ?: if (create) checkNotNull(DocumentsContract.createDocument(
+            parent = children(parent)[name]?.let { DocumentsContract.buildDocumentUriUsingTree(parent, it.id) } ?: if (create) checkNotNull(DocumentsContract.createDocument(
                 resolver, parent, DocumentsContract.Document.MIME_TYPE_DIR, name)) else return null
         }
         return parent
     }
-    override fun openRead(name: String): InputStream = checkNotNull(resolver.openInputStream(known.getValue(name)))
+    private fun uri(name: String) = DocumentsContract.buildDocumentUriUsingTree(root, known.getValue(name).id)
+    override fun openRead(name: String): InputStream = checkNotNull(resolver.openInputStream(uri(name)))
     override fun read(name: String): ByteArray = openRead(name).use { input ->
         val output = ByteArrayOutputStream(); val buffer = ByteArray(8192)
         while (true) {
@@ -50,7 +60,8 @@ internal class PackedDocumentFiles(private val resolver: ContentResolver, tree: 
         if (folder == null) folder = checkNotNull(locate(true))
         val uri = checkNotNull(DocumentsContract.createDocument(resolver, checkNotNull(folder), "application/octet-stream", name))
         checkNotNull(resolver.openOutputStream(uri, "w")).use { output -> input.copyTo(output, 8192); output.flush() }
-        known[name] = uri
+        known[name] = Document(name, DocumentsContract.getDocumentId(uri))
     }
-    override fun delete(name: String) { known[name]?.let { check(DocumentsContract.deleteDocument(resolver, it)); known.remove(name) } }
+    override fun delete(name: String) { known[name]?.let { check(DocumentsContract.deleteDocument(resolver,
+        DocumentsContract.buildDocumentUriUsingTree(root, it.id))); known.remove(name) } }
 }

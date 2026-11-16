@@ -10,6 +10,53 @@ import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class ExternalSyncBenchmarkTest {
+    /** Reproduces the production listing path without touching selected folders or creating 150k files. */
+    @Test fun repeatedLargeInventoryWithSmallNote() {
+        val args = InstrumentationRegistry.getArguments()
+        assumeTrue(args.getString("measureLargeInventory") == "true")
+        val count = (args.getString("backgroundObjects") ?: "75000").toInt().also { require(it in 0..150000) }
+        val seconds = (args.getString("durationSeconds") ?: "0").toLong().also { require(it in 0..86400) }
+        val idleSeconds = (args.getString("idleSeconds") ?: "0").toLong().also { require(it in 0..3600) }
+        val rounds = (args.getString("inventoryRounds") ?: if (seconds > 0) "10000" else "6")
+            .toInt().also { require(it in 1..10000) }
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val context = instrumentation.targetContext
+        check(context.packageName == "net.neomenia.misqnotes.probe")
+        val name = "inventory-${UUID.randomUUID()}"
+        val directory = File(context.cacheDir, "working-set-provider/$name")
+        val remote = File(directory, "misq-v3").also { check(it.mkdirs()) }
+        File(remote, ".virtual-object-count").writeText(count.toString())
+        val local = File(context.cacheDir, "inventory-store-$name")
+        try {
+            val tree = android.provider.DocumentsContract.buildTreeDocumentUri(
+                "net.neomenia.misqnotes.probe.tests.working-set", name)
+            val packed = PackedDocumentFiles(context.contentResolver, tree, "misq-v3")
+            val store = ImmutableNoteStore(local)
+            val transport = ImmutableNoteTransport(store, packed)
+            var root = store.create(NoteInfo(UUID.randomUUID().toString(), "Small note, large remote history", 0, 0))
+            val deadline = SystemClock.elapsedRealtime() + seconds * 1000
+            for (pass in 0 until rounds) {
+                if (pass > 0 && seconds > 0 && SystemClock.elapsedRealtime() >= deadline) break
+                val start = SystemClock.elapsedRealtime()
+                val cpu = Process.getElapsedCpuTime()
+                val before = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+                root = store.saveThumbnail(root, byteArrayOf(pass.toByte()))
+                transport.withInventorySnapshot { transport.publish(root) }
+                val after = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+                instrumentation.sendStatus(0, Bundle().apply { putString("stream",
+                    "\nINVENTORY pass=$pass backgroundFiles=${count * 2} elapsedMs=${SystemClock.elapsedRealtime() - start} cpuMs=${Process.getElapsedCpuTime() - cpu} javaBefore=$before javaAfter=$after max=${Runtime.getRuntime().maxMemory()}\n") })
+                if (idleSeconds > 0) SystemClock.sleep(minOf(idleSeconds * 1000,
+                    if (seconds > 0) (deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0) else Long.MAX_VALUE))
+            }
+            val receiver = ImmutableNoteStore(File(local, "receiver"))
+            val download = ImmutableNoteTransport(receiver, packed)
+            val reopened = download.withInventorySnapshot { download.heads(root.info.id).single() }
+            check(reopened.id == root.id)
+            receiver.install(reopened)
+            download.verifyRemote(reopened)
+        } finally { directory.deleteRecursively(); local.deleteRecursively() }
+    }
+
     @Test fun compareFreshAndReusedInventory() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("measureExternalSync") == "true")
         val instrumentation = InstrumentationRegistry.getInstrumentation()
