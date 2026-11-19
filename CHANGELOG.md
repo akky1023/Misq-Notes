@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/akky1023/Misq-Notes/compare/v0.7.0...v0.7.1) (2026-11-19)
+
+
+### 修正
+
+* 外部同期の一覧取得でメモリが膨張する問題を修正 ([fccc4ee](https://github.com/akky1023/Misq-Notes/commit/fccc4ee6c66b80c9816f6774e546aa0f112a47ba))
+
 ## [0.7.0](https://github.com/akky1023/Misq-Notes/compare/v0.6.1...v0.7.0) (2026-11-13)
 
 
