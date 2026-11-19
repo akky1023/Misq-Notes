@@ -49,8 +49,39 @@ class WorkingSetDocumentsProvider : DocumentsProvider() {
     private fun cursor(projection: Array<out String>?) = MatrixCursor(projection ?: arrayOf(Document.COLUMN_DOCUMENT_ID,
         Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE, Document.COLUMN_FLAGS))
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = cursor(projection).also { row(it, file(documentId)) }
-    override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor =
-        cursor(projection).also { result -> file(parentDocumentId).listFiles().orEmpty().forEach { row(result, it) } }
+    override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor {
+        val parent = file(parentDocumentId)
+        val config = File(parent, ".virtual-object-count")
+        if (config.isFile) {
+            val objects = config.readText().trim().toInt().also { require(it in 0..150000) }
+            val columns = projection ?: arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME)
+            val real = cursor(columns).also { result -> parent.listFiles().orEmpty()
+                .filter { it != config }.forEach { row(result, it) } }
+            // Generate unrelated names lazily: no 150,000-row MatrixCursor or physical files.
+            val virtual = object : android.database.AbstractCursor() {
+                override fun getCount() = objects * 2
+                override fun getColumnNames() = columns
+                override fun getString(column: Int): String? {
+                    val hash = "f" + (position / 2).toString(16).padStart(63, '0')
+                    val name = (if (position % 2 == 0) "object-" else "seal-") + hash + "-00000000-0000-0000-0000-000000000000"
+                    return when (columns[column]) {
+                        Document.COLUMN_DOCUMENT_ID -> "$parentDocumentId/$name"
+                        Document.COLUMN_DISPLAY_NAME -> name
+                        Document.COLUMN_MIME_TYPE -> "application/octet-stream"
+                        else -> null
+                    }
+                }
+                override fun isNull(column: Int) = getString(column) == null
+                override fun getShort(column: Int): Short = 0
+                override fun getInt(column: Int) = 0
+                override fun getLong(column: Int) = 0L
+                override fun getFloat(column: Int) = 0f
+                override fun getDouble(column: Int) = 0.0
+            }
+            return android.database.MergeCursor(arrayOf(real, virtual))
+        }
+        return cursor(projection).also { result -> parent.listFiles().orEmpty().forEach { row(result, it) } }
+    }
     override fun isChildDocument(parentDocumentId: String, documentId: String) = file(documentId).toPath().startsWith(file(parentDocumentId).toPath())
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         if (failWrites) throw FileNotFoundException("Simulated unavailable external folder")

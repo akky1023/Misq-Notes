@@ -6,10 +6,9 @@ import java.util.UUID
 
 /** Stable logical hashes, unique physical uploads. Incomplete files are never overwritten. */
 internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, private val remote: PackedFiles) {
-    @Volatile private var inventory = emptySet<String>()
+    @Volatile private var inventory: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val sealed = mutableMapOf<String, String>()
     private var sealCandidates = emptyMap<String, List<String>>()
-    private var indexedInventory = emptySet<String>()
     private val acknowledged = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val snapshotDepth = ThreadLocal<Int>()
     init { store.fetch = ::openLogical }
@@ -24,18 +23,18 @@ internal class ImmutableNoteTransport(private val store: ImmutableNoteStore, pri
             if (depth == 0) snapshotDepth.remove() else snapshotDepth.set(depth)
         }
     }
-    @Synchronized private fun remember(vararg names: String) { inventory = inventory + names }
+    @Synchronized private fun remember(vararg names: String) { inventory.addAll(names) }
     @Synchronized private fun rememberObject(id: String, name: String, seal: String) {
-        inventory = inventory + name + seal
+        inventory.add(name); inventory.add(seal)
         sealed[id] = name
     }
     @Synchronized private fun refresh() {
         if ((snapshotDepth.get() ?: 0) > 0) return
-        inventory = remote.names()
-        sealed.entries.removeAll { (_, name) -> name !in inventory || "seal-${name.removePrefix("object-")}" !in inventory }
-        if (inventory != indexedInventory) {
+        val next = remote.names()
+        sealed.entries.removeAll { (_, name) -> name !in next || "seal-${name.removePrefix("object-")}" !in next }
+        if (inventory != next) {
+            inventory = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { addAll(next) }
             sealCandidates = inventory.asSequence().filter { it.matches(SEAL) }.groupBy { "o-${it.substring(5, 69)}" }
-            indexedInventory = inventory
         }
     }
     /** Validate a seal when its object is needed by a published or received revision. */
