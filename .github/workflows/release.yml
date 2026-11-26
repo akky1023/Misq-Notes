@@ -73,7 +73,7 @@ jobs:
           log-accepted-android-sdk-licenses: false
       - uses: gradle/actions/setup-gradle@v4
       - name: Test and lint
-        run: bash ./gradlew :app:testDebugUnitTest :app:lintRelease --console=plain
+        run: bash ./gradlew :drawing:testDebugUnitTest :app:testDebugUnitTest :app:lintRelease --console=plain
       - name: Build signed APK
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

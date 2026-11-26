@@ -3,7 +3,7 @@ package jp.handwriting.note.storage
 import java.io.*
 import jp.handwriting.note.editor.EditorTool
 import jp.handwriting.note.editor.PenStyle
-import jp.handwriting.note.editor.PressureCurve
+import net.neomenia.misqnotes.drawing.PressureCurve
 import jp.handwriting.note.editor.PenButtonAction
 import jp.handwriting.note.editor.PenButtonState
 import jp.handwriting.note.editor.LassoMode

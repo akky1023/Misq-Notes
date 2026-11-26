@@ -1,7 +1,7 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 /** Exact distances for a circular eraser swept along a segment (a capsule). */
-internal object SweepGeometry {
+object SweepGeometry {
     fun pointDistanceSquared(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
         val dx = bx - ax; val dy = by - ay
         val length = dx * dx + dy * dy

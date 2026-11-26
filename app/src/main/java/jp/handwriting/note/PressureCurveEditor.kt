@@ -1,5 +1,8 @@
 package jp.handwriting.note
 
+import net.neomenia.misqnotes.drawing.PressureControlPoint
+import net.neomenia.misqnotes.drawing.PressureCurve
+import net.neomenia.misqnotes.drawing.PressureSpline
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
 

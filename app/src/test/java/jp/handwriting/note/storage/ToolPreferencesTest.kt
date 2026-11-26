@@ -5,11 +5,11 @@ import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import jp.handwriting.note.editor.EditorTool
 import jp.handwriting.note.editor.PenStyle
-import jp.handwriting.note.editor.PressureCurve
-import jp.handwriting.note.editor.BezierControls
-import jp.handwriting.note.editor.PressureControlPoint
-import jp.handwriting.note.editor.PressureSpline
-import jp.handwriting.note.editor.PressureBasis
+import net.neomenia.misqnotes.drawing.PressureCurve
+import net.neomenia.misqnotes.drawing.BezierControls
+import net.neomenia.misqnotes.drawing.PressureControlPoint
+import net.neomenia.misqnotes.drawing.PressureSpline
+import net.neomenia.misqnotes.drawing.PressureBasis
 import jp.handwriting.note.editor.PenButtonAction
 import jp.handwriting.note.editor.LassoMode
 import org.junit.Assert.*

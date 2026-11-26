@@ -1,4 +1,4 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import org.junit.Assert.*
 import org.junit.Test

@@ -1,5 +1,6 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.WorldPoint
 import org.junit.Assert.*
 import org.junit.Test
 

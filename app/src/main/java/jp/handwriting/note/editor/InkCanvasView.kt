@@ -1,5 +1,9 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.HoldLine
+import net.neomenia.misqnotes.drawing.InkStrokeRenderer
+import net.neomenia.misqnotes.drawing.LiveInk
+import net.neomenia.misqnotes.drawing.WorldPoint
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
 
@@ -23,15 +27,11 @@ import android.widget.FrameLayout
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
-import androidx.ink.authoring.InProgressStrokeId
-import androidx.ink.authoring.InProgressStrokesFinishedListener
-import androidx.ink.authoring.InProgressStrokesView
 import androidx.ink.brush.Brush
 import androidx.ink.brush.InputToolType
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
-import androidx.input.motionprediction.MotionEventPredictor
 import kotlin.math.hypot
 import kotlinx.coroutines.*
 
@@ -237,12 +237,16 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             if (compact && strokeCache.pendingCompaction) postOnAnimation(compactStrokes)
         }
     }
-    private val ink = InProgressStrokesView(context).also(InkStrokeRenderer::configure)
-    private var predictor = MotionEventPredictor.newInstance(this)
-    private var predictionValid = true
+    private val liveInk = LiveInk(this) { operation, stroke ->
+        val source = EditorStroke(stroke)
+        model.edits.resolveStroke(operation, source)
+        flashIfStar(source)
+        // Transfer both layers in the same UI loop to avoid gaps or double drawing.
+        completed.invalidate()
+    }
+    private val ink get() = liveInk.view
     private var pointerId: Int? = null
     private var activeDevice: Int? = null
-    private var drawing: InProgressStrokeId? = null
     private var holdLine: HoldLine? = null
     private var linePreview: Stroke? = null
     private var linePressure = StrokeInput.NO_PRESSURE
@@ -253,14 +257,11 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
     private val angleBackground = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xDD263238.toInt() }
     private val holdLineTimer = Runnable {
         val line = holdLine
-        val id = drawing
-        if (line != null && id != null && line.activate(SystemClock.uptimeMillis())) {
-            val copy = recovery[id]
-            if (copy != null) {
-                linePressure = copy.inputs[copy.inputs.size - 1].pressure
-                ink.cancelStroke(id)
-                updateLinePreview(copy)
-            }
+        val brush = liveInk.activeBrush
+        if (line != null && brush != null && line.activate(SystemClock.uptimeMillis())) {
+            linePressure = liveInk.lastPressure
+            liveInk.hideActiveStroke()
+            updateLinePreview(brush)
         }
     }
 
@@ -273,7 +274,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             line.sample(WorldPoint(model.viewport.worldX(x), model.viewport.worldY(y)),
                 if (historical) event.getHistoricalEventTime(h) else event.eventTime)
         }
-        if (line.active) drawing?.let { recovery[it]?.let(::updateLinePreview) }
+        if (line.active) liveInk.activeBrush?.let(::updateLinePreview)
         else {
             removeCallbacks(holdLineTimer)
             val remaining = HoldLine.HOLD_MS - (SystemClock.uptimeMillis() - line.stationarySince)
@@ -281,12 +282,12 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         }
     }
 
-    private fun updateLinePreview(copy: Recovery) {
+    private fun updateLinePreview(brush: Brush) {
         val line = holdLine ?: return
         val inputs = MutableStrokeInputBatch()
             .add(InputToolType.STYLUS, line.start.x, line.start.y, 0L, pressure = linePressure)
             .add(InputToolType.STYLUS, line.end.x, line.end.y, 100L, pressure = linePressure)
-        linePreview = Stroke(copy.brush, inputs)
+        linePreview = Stroke(brush, inputs)
         invalidate()
     }
     private var erasing: Long? = null
@@ -467,7 +468,6 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 thickness / 2f, thickness / 2f, scrollIndicatorPaint)
         }
     }
-    private val recovery = mutableMapOf<InProgressStrokeId, Recovery>()
     private data class CompletedState(val revision: Long, val position: ViewPosition,
         val paper: jp.handwriting.note.storage.NotePaper?, val selectionOffset: WorldPoint, val cacheMode: StrokeCacheMode)
     private var completedState: CompletedState? = null
@@ -487,30 +487,6 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         invalidate()
     }
 
-    /** Small input-only mirror, released on handoff; recovers completed strokes on View recreation. */
-    private class Recovery(val operation: Long, val brush: Brush, val startTime: Long, val transform: Matrix, val pressureSupported: Boolean) {
-        val inputs = MutableStrokeInputBatch()
-        private val point = FloatArray(2)
-        private var lastTime = -1L
-        var completed = false
-        fun record(event: MotionEvent, index: Int) {
-            for (h in 0..event.historySize) {
-                val historical = h < event.historySize
-                val time = (if (historical) event.getHistoricalEventTime(h) else event.eventTime) - startTime
-                if (time < 0 || time <= lastTime) continue
-                point[0] = if (historical) event.getHistoricalX(index, h) else event.getX(index)
-                point[1] = if (historical) event.getHistoricalY(index, h) else event.getY(index)
-                transform.mapPoints(point)
-                val x = point[0]; val y = point[1]
-                if (!x.isFinite() || !y.isFinite()) continue
-                val p = if (historical) event.getHistoricalPressure(index, h) else event.getPressure(index)
-                inputs.add(InputToolType.STYLUS, x, y, time,
-                    pressure = if (pressureSupported && p.isFinite()) p.coerceIn(0f, 1f) else StrokeInput.NO_PRESSURE)
-                lastTime = time
-            }
-        }
-    }
-
     init {
         setBackgroundColor(Color.rgb(250, 249, 244))
         setWillNotDraw(false)
@@ -523,20 +499,6 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         ink.eagerInit()
         isVerticalScrollBarEnabled = false
         isHorizontalScrollBarEnabled = false
-        ink.addFinishedStrokesListener(object : InProgressStrokesFinishedListener {
-            override fun onStrokesFinished(strokes: Map<InProgressStrokeId, Stroke>) {
-                strokes.forEach { (id, stroke) ->
-                    recovery.remove(id)?.let {
-                        val source = EditorStroke(stroke)
-                        model.edits.resolveStroke(it.operation, source)
-                        flashIfStar(source)
-                    }
-                }
-                // Transfer both layers in the same UI loop to avoid gaps or double drawing.
-                completed.invalidate()
-                ink.removeFinishedStrokes(strokes.keys)
-            }
-        })
     }
 
     override fun onAttachedToWindow() {
@@ -622,13 +584,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         // Some tablets deliver palm and pen as separate devices, both with pointer ID 0.
         if (activeDevice != null && event.deviceId != activeDevice) return true
         if (event.actionMasked == MotionEvent.ACTION_DOWN && pointerId != null) cancelGesture()
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-            predictionValid = true
-            predictor = MotionEventPredictor.newInstance(this)
-        }
-        if (predictionValid) {
-            try { predictor.record(event) } catch (_: IllegalArgumentException) { predictionValid = false }
-        }
+        liveInk.recordForPrediction(event)
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = event.actionIndex
@@ -664,9 +620,7 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                         val pressureRange = event.device?.getMotionRange(MotionEvent.AXIS_PRESSURE, event.source)
                         val pressureSupported = pressureRange != null && pressureRange.max > pressureRange.min
                         val brush = model.brushForPressure(pressureSupported)
-                        val strokeId = ink.startStroke(event, id, brush, viewToStroke)
-                        recovery[strokeId] = Recovery(operation, brush, event.eventTime, Matrix(viewToStroke), pressureSupported).also { it.record(event, i) }
-                        drawing = strokeId
+                        liveInk.start(event, i, brush, viewToStroke, operation, pressureSupported)
                         val prefs = model.preferences.value.value
                         if (prefs.drawShapes) {
                             holdLine = HoldLine(WorldPoint(x, y), scale / resources.displayMetrics.density, prefs.snapShapes, event.eventTime)
@@ -679,13 +633,9 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 val id = pointerId
                 val i = id?.let(event::findPointerIndex) ?: -1
                 if (i >= 0) {
-                    drawing?.let { strokeId ->
+                    if (liveInk.isDrawing) {
                         sampleHoldLine(event, i)
-                        if (holdLine?.active != true) {
-                            recovery[strokeId]?.record(event, i)
-                            val prediction = if (predictionValid) predictor.predict() else null
-                            try { ink.addToStroke(event, id!!, strokeId, prediction) } finally { prediction?.recycle() }
-                        }
+                        liveInk.add(event, i)
                     }
                     if (erasing != null) eraseSamples(event, i)
                     if (lasso != null || selectionMoving) selectionSamples(event, i)
@@ -696,18 +646,15 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
                 if (event.getPointerId(i) == pointerId) {
                     if (event.flags and MotionEvent.FLAG_CANCELED != 0) cancelGesture()
                     else {
-                        drawing?.let { id ->
+                        if (liveInk.isDrawing) {
                             sampleHoldLine(event, i)
                             if (holdLine?.active == true) {
-                                recovery.remove(id)?.let { copy ->
-                                    linePreview?.let { model.edits.resolveStroke(copy.operation, EditorStroke(it)) }
-                                        ?: model.edits.cancelStroke(copy.operation)
+                                liveInk.cancelActiveStroke()?.let { operation ->
+                                    linePreview?.let { model.edits.resolveStroke(operation, EditorStroke(it)) }
+                                        ?: model.edits.cancelStroke(operation)
                                 }
                                 completed.invalidate()
-                            } else {
-                                recovery[id]?.let { it.record(event, i); it.completed = true }
-                                ink.finishStroke(event, event.getPointerId(i), id)
-                            }
+                            } else liveInk.finish(event, i)
                         }
                         if (erasing != null) eraseSamples(event, i)
                         if (lasso != null || selectionMoving) selectionSamples(event, i)
@@ -772,21 +719,16 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
             model.cancelSpaceInsertion()
         }
         finishFingerGesture(canceled = true)
-        val stroke = drawing
-        val wasLine = holdLine?.active == true
         val erase = erasing
         if (selectionMoving || lasso != null) model.cancelSelectionMove()
         resetGesture()
-        stroke?.let { id ->
-            if (!wasLine) ink.cancelStroke(id)
-            recovery.remove(id)?.let { model.edits.cancelStroke(it.operation) }
-        }
+        liveInk.cancelActiveStroke()?.let { model.edits.cancelStroke(it) }
         erase?.let { model.edits.endErase(it, canceled = true) }
     }
     private fun resetGesture() {
         removeCallbacks(holdLineTimer)
         holdLine = null; linePreview = null
-        pointerId = null; activeDevice = null; drawing = null; erasing = null; cursor = null
+        pointerId = null; activeDevice = null; erasing = null; cursor = null
         model.penButton.endContact()
         model.buttonChanged()
         lasso = null; selectionMoving = false; imageResizing = false; imagePinching = false
@@ -798,12 +740,10 @@ class InkCanvasView(context: Context, private val model: EditorViewModel, render
         stylusNear = false
         finishFingerGesture()
         cancelGesture(dismissMenu)
-        recovery.toMap().forEach { (id, copy) ->
-            if (copy.completed && !copy.inputs.isEmpty()) {
-                model.edits.resolveStroke(copy.operation, EditorStroke(Stroke(copy.brush, copy.inputs)))
-            } else model.edits.cancelStroke(copy.operation)
-            recovery.remove(id)
-        }
+        liveInk.settle(
+            onRecovered = { operation, stroke -> model.edits.resolveStroke(operation, EditorStroke(stroke)) },
+            onCanceled = { model.edits.cancelStroke(it) },
+        )
         model.viewportChanged()
     }
     override fun dispatchDraw(canvas: Canvas) {

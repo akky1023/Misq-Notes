@@ -1,5 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.InkStrokeRenderer
+import net.neomenia.misqnotes.drawing.StrokeFidelityCache
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
 

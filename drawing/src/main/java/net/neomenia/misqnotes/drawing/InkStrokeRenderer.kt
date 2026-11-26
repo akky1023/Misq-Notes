@@ -1,4 +1,4 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import android.annotation.SuppressLint
 import android.graphics.Canvas
@@ -12,7 +12,7 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.Stroke
 
 /** Ink 1.0's mesh renderer can drop round cap geometry depending on stroke position. */
-internal object InkStrokeRenderer {
+object InkStrokeRenderer {
     // Pinned Ink 1.0 exposes the path fallback through this restricted factory overload.
     @SuppressLint("RestrictedApi")
     fun create(): CanvasStrokeRenderer = LocalRenderer(CanvasStrokeRenderer.create(forcePathRendering = true))
@@ -29,7 +29,7 @@ internal object InkStrokeRenderer {
     /** Live and completed strokes share brush behavior; completed geometry uses local coordinates. */
     @OptIn(ExperimentalInkCustomBrushApi::class)
     @SuppressLint("RestrictedApi")
-    internal class LocalRenderer(private val delegate: CanvasStrokeRenderer, private val display: Boolean = false) : CanvasStrokeRenderer by delegate {
+    class LocalRenderer internal constructor(private val delegate: CanvasStrokeRenderer, private val display: Boolean = false) : CanvasStrokeRenderer by delegate {
         private var retained: Set<Stroke>? = null
         private val cache = object : LinkedHashMap<Stroke, LocalStrokeGeometry>(16, 0.75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Stroke, LocalStrokeGeometry>?) = retained == null && size > 128
@@ -49,7 +49,7 @@ internal object InkStrokeRenderer {
             if (needsPreparation(stroke)) geometry(stroke)
         }
 
-        internal fun geometry(stroke: Stroke): LocalStrokeGeometry {
+        fun geometry(stroke: Stroke): LocalStrokeGeometry {
             synchronized(this) { cache[stroke]?.let { return it } }
             // Refine directly in local coordinates instead of generating two native outlines.
             val epsilon = if (display) StrokeFidelity.displayEpsilon(stroke.brush.size) else stroke.brush.epsilon

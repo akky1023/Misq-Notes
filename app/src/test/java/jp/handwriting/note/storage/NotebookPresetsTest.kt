@@ -1,7 +1,7 @@
 package jp.handwriting.note.storage
 
 import jp.handwriting.note.editor.PenButtonAction
-import jp.handwriting.note.editor.PressureCurve
+import net.neomenia.misqnotes.drawing.PressureCurve
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Rule

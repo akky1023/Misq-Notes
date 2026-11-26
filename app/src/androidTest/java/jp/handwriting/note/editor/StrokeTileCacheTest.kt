@@ -1,5 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.InkStrokeRenderer
+import net.neomenia.misqnotes.drawing.WorldPoint
 import android.graphics.*
 import android.os.SystemClock
 import androidx.ink.brush.Brush

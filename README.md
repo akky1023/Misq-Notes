@@ -13,6 +13,7 @@ Xiaomi Pad 7 & Xiaomi Focus Pen向けの手書きノートアプリです．
 Kotlin，Jetpack Compose，Jetpack Inkを使用しています．
 
 - [ビルド・テスト・署名](BUILD.md)
+- [Android手書き描画ライブラリ](drawing/README.md)
 - [端末内の保存形式と復旧処理](docs/storage-format.md)
 - [1冊1ファイルの保存形式（テスト版）](docs/misq-storage.md)
 - [外部保存の形式と移行・競合処理](docs/packed-storage.md)

@@ -1,9 +1,9 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import kotlin.math.*
 
 /** Coordinates use the canvas y-down system; angles use the usual y-up polar system. */
-internal class HoldLine(
+class HoldLine(
     val start: WorldPoint, private val dpPerUnit: Float, private val snap: Boolean,
     time: Long,
 ) {

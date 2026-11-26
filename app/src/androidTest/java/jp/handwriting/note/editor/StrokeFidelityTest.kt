@@ -1,5 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.InkBrushes
+import net.neomenia.misqnotes.drawing.StrokeFidelityCache
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.pdf.PdfRenderer

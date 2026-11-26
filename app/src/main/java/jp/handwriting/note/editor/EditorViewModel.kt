@@ -1,5 +1,10 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.CircularEraser
+import net.neomenia.misqnotes.drawing.InkBrushes
+import net.neomenia.misqnotes.drawing.PressureCurve
+import net.neomenia.misqnotes.drawing.StrokeFidelity
+import net.neomenia.misqnotes.drawing.WorldPoint
 import jp.handwriting.note.AppMessages
 import jp.handwriting.note.R
 
