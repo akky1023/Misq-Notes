@@ -8,10 +8,10 @@ import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInputBatch
 import jp.handwriting.note.editor.EditorStroke
 import jp.handwriting.note.editor.OrderedEdits
-import jp.handwriting.note.editor.InkBrushes
-import jp.handwriting.note.editor.InkStrokeRenderer
-import jp.handwriting.note.editor.PressureCurve
-import jp.handwriting.note.editor.PressureBasis
+import net.neomenia.misqnotes.drawing.InkBrushes
+import net.neomenia.misqnotes.drawing.InkStrokeRenderer
+import net.neomenia.misqnotes.drawing.PressureCurve
+import net.neomenia.misqnotes.drawing.PressureBasis
 import java.io.*
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -239,7 +239,10 @@ class NoteRepository internal constructor(private val files: NoteFiles,
                 3 -> InkBrushes.highlighter
                 4 -> InkBrushes.pressurePen(PressureCurve(input.readInt(), input.readInt()))
                 5 -> InkBrushes.pressurePen(PressureCurveCodec.read(input).also { require(it.bezier != null) })
-                6 -> InkBrushes.pressurePen(PressureCurveCodec.read(input).also { require(it.spline?.basis == PressureBasis.INTERPOLATED && it.spline.tangents == null) })
+                6 -> InkBrushes.pressurePen(PressureCurveCodec.read(input).also {
+                    val spline = it.spline
+                    require(spline?.basis == PressureBasis.INTERPOLATED && spline.tangents == null)
+                })
                 7 -> InkBrushes.pressurePen(PressureCurveCodec.read(input).also { require(it.spline?.basis == PressureBasis.BEZIER_CONTROLS) })
                 8 -> InkBrushes.pressurePen(PressureCurveCodec.read(input).also { require(it.spline?.tangents != null) })
                 else -> throw IOException("Unsupported brush")

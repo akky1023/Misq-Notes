@@ -1,17 +1,17 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import kotlin.math.roundToInt
 import kotlin.math.pow
 import kotlin.math.hypot
 
-internal data class PressureControlPoint(val x: Int, val y: Int) {
+data class PressureControlPoint(val x: Int, val y: Int) {
     init { require(x in 0..100 && y in 1..100) }
 }
-internal data class PressureSample(val x: Float, val y: Float)
-internal enum class PressureBasis { INTERPOLATED, BEZIER_CONTROLS }
+data class PressureSample(val x: Float, val y: Float)
+enum class PressureBasis { INTERPOLATED, BEZIER_CONTROLS }
 
 /** Shared samples drive Ink and the graph; the basis also preserves older interpolated strokes. */
-internal class PressureSpline(points: List<PressureControlPoint>, val basis: PressureBasis = PressureBasis.INTERPOLATED,
+class PressureSpline(points: List<PressureControlPoint>, val basis: PressureBasis = PressureBasis.INTERPOLATED,
     tangents: List<PressureTangent>? = null) {
     val points: List<PressureControlPoint> = points.toList()
     val tangents: List<PressureTangent>? = tangents?.toList()

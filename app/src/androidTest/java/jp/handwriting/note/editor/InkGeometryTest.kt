@@ -1,5 +1,6 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.CircularEraser
 import androidx.ink.brush.Brush
 import androidx.ink.brush.InputToolType
 import androidx.ink.brush.StockBrushes

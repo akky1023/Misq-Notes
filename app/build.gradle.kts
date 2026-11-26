@@ -62,19 +62,14 @@ android {
 }
 
 dependencies {
+    implementation(project(":drawing"))
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
-    implementation("androidx.ink:ink-authoring:1.0.0")
-    implementation("androidx.ink:ink-brush:1.0.0")
-    implementation("androidx.ink:ink-strokes:1.0.0")
-    implementation("androidx.ink:ink-geometry:1.0.0")
-    implementation("androidx.ink:ink-rendering:1.0.0")
     implementation("androidx.ink:ink-storage:1.0.0")
-    implementation("androidx.input:input-motionprediction:1.0.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

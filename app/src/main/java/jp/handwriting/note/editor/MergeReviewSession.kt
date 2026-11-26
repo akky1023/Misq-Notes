@@ -1,5 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.InkStrokeRenderer
+import net.neomenia.misqnotes.drawing.StrokeFidelity
 import android.graphics.*
 import androidx.ink.geometry.MutableVec
 import jp.handwriting.note.storage.*

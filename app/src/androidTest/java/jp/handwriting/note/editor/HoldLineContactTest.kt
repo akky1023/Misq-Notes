@@ -1,5 +1,6 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.WorldPoint
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent

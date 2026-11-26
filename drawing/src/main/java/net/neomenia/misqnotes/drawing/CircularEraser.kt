@@ -1,9 +1,9 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import androidx.ink.geometry.*
 import androidx.ink.geometry.Intersection.intersects
 
-internal object CircularEraser {
+object CircularEraser {
     fun hits(mesh: PartitionedMesh, x0: Float, y0: Float, x1: Float, y1: Float, radius: Float): Boolean {
         if (ImmutableVec(x0, y0).intersects(mesh, AffineTransform.IDENTITY) ||
             ImmutableSegment(ImmutableVec(x0, y0), ImmutableVec(x1, y1)).intersects(mesh, AffineTransform.IDENTITY)) return true

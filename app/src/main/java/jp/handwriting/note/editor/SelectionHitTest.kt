@@ -1,5 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.WorldPoint
+
 /** The selection's touch margin stays eight screen pixels at every zoom level. */
 internal object SelectionHitTest {
     fun contains(bounds: StrokeIndex.Bounds?, offset: WorldPoint, x: Float, y: Float, scale: Float): Boolean {

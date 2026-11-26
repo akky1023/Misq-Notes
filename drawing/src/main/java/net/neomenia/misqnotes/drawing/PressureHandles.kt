@@ -1,15 +1,15 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import kotlin.math.*
 
 /** The two lengths are independent; their common angle keeps the tangent direction aligned. */
-internal data class PressureTangent(val angle: Float, val incoming: Float, val outgoing: Float) {
+data class PressureTangent(val angle: Float, val incoming: Float, val outgoing: Float) {
     init { require(angle.isFinite() && angle in 0f..90f && incoming.isFinite() && incoming in 0f..142f && outgoing.isFinite() && outgoing in 0f..142f) }
     val unitX get() = cos(angle * PI / 180).toFloat().coerceAtLeast(0f)
     val unitY get() = sin(angle * PI / 180).toFloat().coerceAtLeast(0f)
 }
 
-internal object PressureHandles {
+object PressureHandles {
     fun automatic(points: List<PressureControlPoint>, slopes: FloatArray): List<PressureTangent> = points.indices.map { i ->
         val angle = (atan(slopes[i].toDouble()) * 180 / PI).toFloat()
         val incoming = if (i == 0) 0f else (points[i].x - points[i - 1].x) / 3f

@@ -1,9 +1,9 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import kotlin.math.pow
 
 /** Monotone cubic Bezier from (0, 0) to (1, 1), with integer-percent handles. */
-internal data class BezierControls(val x1: Int = 33, val y1: Int = 33, val x2: Int = 67, val y2: Int = 67) {
+data class BezierControls(val x1: Int = 33, val y1: Int = 33, val x2: Int = 67, val y2: Int = 67) {
     init { require(x1 in 0..100 && x2 in x1..100 && y1 in 0..100 && y2 in y1..100) }
     fun factor(x: Float): Float {
         require(x.isFinite())
@@ -63,7 +63,7 @@ internal data class BezierControls(val x1: Int = 33, val y1: Int = 33, val x2: I
     }
 }
 
-internal data class PressureCurve(
+data class PressureCurve(
     val minimumPercent: Int = 20,
     val exponentPercent: Int = 100,
     val bezier: BezierControls? = null,

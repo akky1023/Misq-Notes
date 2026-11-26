@@ -1,15 +1,15 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import androidx.ink.strokes.Stroke
 
 /** Geometry tolerance in document units, also bounded relative to thin brush tips. */
-internal object StrokeFidelity {
+object StrokeFidelity {
     fun displayEpsilon(size: Float) = minOf(0.01f, size / 128f)
     fun exportEpsilon(size: Float) = minOf(0.001f, size / 1024f)
 }
 
 /** Refine only strokes actually rendered; keep the original document and inputs immutable. */
-internal class StrokeFidelityCache(private val forExport: Boolean = false) {
+class StrokeFidelityCache(private val forExport: Boolean = false) {
     private val strokes = object : LinkedHashMap<Stroke, Stroke>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Stroke, Stroke>?) = forExport && size > 128
     }

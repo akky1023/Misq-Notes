@@ -1,13 +1,13 @@
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import androidx.ink.brush.ExperimentalInkCustomBrushApi
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 
 /** Rendering-only geometry: saved coordinates and pressures remain untouched. */
-internal data class LocalStrokeGeometry(val stroke: Stroke, val x: Float, val y: Float)
+data class LocalStrokeGeometry(val stroke: Stroke, val x: Float, val y: Float)
 
-internal object StrokeLocalCoordinates {
+object StrokeLocalCoordinates {
     @OptIn(ExperimentalInkCustomBrushApi::class)
     fun create(source: Stroke, epsilon: Float = source.brush.epsilon): LocalStrokeGeometry {
         if (source.inputs.isEmpty()) return LocalStrokeGeometry(source, 0f, 0f)

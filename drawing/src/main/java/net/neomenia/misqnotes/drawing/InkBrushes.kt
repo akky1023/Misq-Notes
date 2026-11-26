@@ -1,6 +1,6 @@
 @file:Suppress("RestrictedApi")
 
-package jp.handwriting.note.editor
+package net.neomenia.misqnotes.drawing
 
 import androidx.ink.brush.*
 import androidx.ink.geometry.ImmutableVec
@@ -9,7 +9,7 @@ import kotlin.math.pow
 
 @OptIn(ExperimentalInkCustomBrushApi::class)
 @SuppressLint("RestrictedApi")
-internal object InkBrushes {
+object InkBrushes {
     val highlighter = StockBrushes.highlighter(SelfOverlap.DISCARD, StockBrushes.HighlighterVersion.V1)
     private val curves = object : LinkedHashMap<PressureCurve, BrushFamily>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<PressureCurve, BrushFamily>?) = size > 32

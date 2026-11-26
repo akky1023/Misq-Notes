@@ -31,7 +31,7 @@ jobs:
           - job: build
             tasks: ':app:assembleDebug :app:assembleRelease'
           - job: test
-            tasks: ':app:testDebugUnitTest'
+            tasks: ':drawing:testDebugUnitTest :app:testDebugUnitTest'
           - job: lint
             tasks: ':app:lintRelease'
     steps:
@@ -67,5 +67,6 @@ jobs:
           name: android-${{ matrix.job }}-reports-${{ github.run_number }}
           path: |
             app/build/reports/tests/
+            drawing/build/reports/tests/
             app/build/reports/lint-results-release.*
           if-no-files-found: warn

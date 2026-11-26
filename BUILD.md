@@ -16,7 +16,7 @@ Gradle Wrapperを同梱しています。Gradle本体や依存ライブラリの
 リポジトリのルートで実行します。以下はWindows PowerShellの例です。
 
 ```powershell
-.\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
+.\gradlew.bat :drawing:testDebugUnitTest :app:assembleDebug :app:testDebugUnitTest :app:lintRelease
 ```
 
 macOS／Linuxでは、`.\gradlew.bat`を`./gradlew`に置き換えてください。

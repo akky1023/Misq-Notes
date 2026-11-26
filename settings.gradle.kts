@@ -13,4 +13,4 @@ dependencyResolutionManagement {
     }
 }
 rootProject.name = "HandwritingNote"
-include(":app")
+include(":app", ":drawing")

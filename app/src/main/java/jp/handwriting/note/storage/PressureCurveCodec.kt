@@ -2,22 +2,23 @@ package jp.handwriting.note.storage
 
 import java.io.DataInput
 import java.io.DataOutput
-import jp.handwriting.note.editor.BezierControls
-import jp.handwriting.note.editor.PressureCurve
-import jp.handwriting.note.editor.PressureControlPoint
-import jp.handwriting.note.editor.PressureSpline
-import jp.handwriting.note.editor.PressureBasis
-import jp.handwriting.note.editor.PressureTangent
+import net.neomenia.misqnotes.drawing.BezierControls
+import net.neomenia.misqnotes.drawing.PressureCurve
+import net.neomenia.misqnotes.drawing.PressureControlPoint
+import net.neomenia.misqnotes.drawing.PressureSpline
+import net.neomenia.misqnotes.drawing.PressureBasis
+import net.neomenia.misqnotes.drawing.PressureTangent
 
 internal object PressureCurveCodec {
     fun write(out: DataOutput, curve: PressureCurve) {
-        out.writeInt(when { curve.spline?.tangents != null -> 4; curve.spline?.basis == PressureBasis.BEZIER_CONTROLS -> 3; curve.spline != null -> 2; curve.bezier != null -> 1; else -> 0 })
+        val spline = curve.spline
+        out.writeInt(when { spline?.tangents != null -> 4; spline?.basis == PressureBasis.BEZIER_CONTROLS -> 3; spline != null -> 2; curve.bezier != null -> 1; else -> 0 })
         out.writeInt(curve.minimumPercent)
         val controls = curve.bezier
-        if (curve.spline != null) {
-            out.writeInt(curve.spline.points.size)
-            curve.spline.points.forEach { out.writeInt(it.x); out.writeInt(it.y) }
-            curve.spline.tangents?.forEach { out.writeFloat(it.angle); out.writeFloat(it.incoming); out.writeFloat(it.outgoing) }
+        if (spline != null) {
+            out.writeInt(spline.points.size)
+            spline.points.forEach { out.writeInt(it.x); out.writeInt(it.y) }
+            spline.tangents?.forEach { out.writeFloat(it.angle); out.writeFloat(it.incoming); out.writeFloat(it.outgoing) }
         } else if (controls == null) out.writeInt(curve.exponentPercent)
         else listOf(controls.x1, controls.y1, controls.x2, controls.y2).forEach(out::writeInt)
     }

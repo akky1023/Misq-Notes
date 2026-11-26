@@ -1,5 +1,6 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.WorldPoint
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color

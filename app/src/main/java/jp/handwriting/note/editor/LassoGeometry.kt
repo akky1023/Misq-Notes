@@ -1,8 +1,7 @@
 package jp.handwriting.note.editor
 
+import net.neomenia.misqnotes.drawing.WorldPoint
 import kotlin.math.abs
-
-internal data class WorldPoint(val x: Float, val y: Float)
 
 internal enum class LassoMode { FREE, RECTANGLE }
 
